@@ -1,0 +1,7 @@
+describe <%= class_name %>, '#<%= method_name %>' do
+  it 'returns <%= return_value %>' do
+    <%= instance_name %> = <%= class_name %>.new
+
+    <%= instance_name %>.<%= method_name %>.should == <%= return_value %>
+  end
+end
