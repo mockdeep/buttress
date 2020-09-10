@@ -1,5 +1,5 @@
 describe <%= class_name %>, '#<%= method_name %>' do
-  it 'returns <%= return_value %>' do
+  it 'returns <%= return_value.gsub("'", '"') %>' do
     <%= instance_name %> = <%= class_name %>.new
 
     <%= instance_name %>.<%= method_name %>.should == <%= return_value %>
