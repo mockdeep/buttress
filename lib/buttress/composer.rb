@@ -35,7 +35,16 @@ module Buttress
 
   class MethodNode < BaseNode
     def method_call
-      name
+      if args.any?
+        values = ["'blah'"] * args.length
+        "#{name}(#{values.join(', ')})"
+      else
+        name
+      end
+    end
+
+    def args
+      raw_node.children[1].children
     end
 
     def name
@@ -52,7 +61,23 @@ module Buttress
       when :int
         return_expression.children.last.to_s
       when :lvar
+        "'blah'"
+      else
         binding.irb
+        raise "unhandled type: #{return_expression.type}"
+      end
+    end
+
+    def return_name
+      return_expression = raw_node.children.last
+      case return_expression.type
+      when :true
+        'true'
+      when :str
+        "'#{return_expression.children.last}'"
+      when :int
+        return_expression.children.last.to_s
+      when :lvar
         return_expression.children.last.to_s
       else
         binding.irb
@@ -73,6 +98,14 @@ module Buttress
           child_node.type == :begin && find_method_node(child_node, method_name)
       end
     end
+
+    def name
+      raw_node.children.first.children.last.to_s
+    end
+
+    def instance_name
+      name.underscore.split('/').last
+    end
   end
 
   class Composer
@@ -86,11 +119,6 @@ module Buttress
       root_node = RootNode.new(Parser::Ruby18.parse(code))
       class_node = root_node.find_class(class_name)
       method_node = class_node.find_method(method_name)
-
-      # need to get a better return value
-      return_value = method_node.return_value
-      method_call = method_node.method_call
-      instance_name = class_name.underscore.split('/').last
 
       ERB.new(TEMPLATE).result(binding)
     end

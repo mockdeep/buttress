@@ -66,7 +66,7 @@ RSpec.describe Buttress::Composer, '#call' do
     expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
   end
 
-  xit 'returns test code for when method returns given value' do
+  it 'returns test code for when method returns given value' do
     code = <<~RUBY
       class MyClass
         def call_me(value)
@@ -77,7 +77,7 @@ RSpec.describe Buttress::Composer, '#call' do
 
     expected_tests = <<~RUBY
       describe MyClass, '#call_me' do
-        it 'returns the given value' do
+        it 'returns value' do
           my_class = MyClass.new
 
           my_class.call_me('blah').should == 'blah'
