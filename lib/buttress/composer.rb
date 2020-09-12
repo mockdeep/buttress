@@ -62,6 +62,9 @@ module Buttress
         return_expression.children.last.to_s
       when :lvar
         "'blah'"
+      when :send
+        _, operator, arg = return_expression.children
+        "'#{"blah".send(operator, arg.children.last)}'"
       else
         binding.irb
         raise "unhandled type: #{return_expression.type}"
@@ -79,6 +82,9 @@ module Buttress
         return_expression.children.last.to_s
       when :lvar
         return_expression.children.last.to_s
+      when :send
+        receiver, operator, arg = return_expression.children
+        "#{receiver.children.last} #{operator} #{arg.children.last}"
       else
         binding.irb
         raise "unhandled type: #{return_expression.type}"

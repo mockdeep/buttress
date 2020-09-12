@@ -88,4 +88,48 @@ RSpec.describe Buttress::Composer, '#call' do
     expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
   end
 
+  it 'returns test code for when method takes 2 arguments' do
+    code = <<~RUBY
+      class MyClass
+        def call_me(value1, value2)
+          value1
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      describe MyClass, '#call_me' do
+        it 'returns value1' do
+          my_class = MyClass.new
+
+          my_class.call_me('blah', 'blah').should == 'blah'
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
+  end
+
+  it 'returns test code for when method returns new value' do
+    code = <<~RUBY
+      class MyClass
+        def call_me(value)
+          value * 2
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      describe MyClass, '#call_me' do
+        it 'returns value * 2' do
+          my_class = MyClass.new
+
+          my_class.call_me('blah').should == 'blahblah'
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
+  end
+
 end
