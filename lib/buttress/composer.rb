@@ -33,18 +33,36 @@ module Buttress
     end
   end
 
+  class ArgumentNode < BaseNode
+    attr_accessor :position
+
+    def initialize(raw_node, position)
+      super(raw_node)
+      self.position = position
+    end
+
+    def value
+      "blah#{position}"
+    end
+
+    def name
+      raw_node.children.last
+    end
+  end
+
   class MethodNode < BaseNode
     def method_call
       if args.any?
-        values = ["'blah'"] * args.length
-        "#{name}(#{values.join(', ')})"
+        "#{name}('#{args.map(&:value).join("', '")}')"
       else
         name
       end
     end
 
     def args
-      raw_node.children[1].children
+      raw_node.children[1].children.map.with_index do |arg, index|
+        ArgumentNode.new(arg, index + 1)
+      end
     end
 
     def name
@@ -61,14 +79,19 @@ module Buttress
       when :int
         return_expression.children.last.to_s
       when :lvar
-        "'blah'"
+        "'#{find_arg(return_expression.children.last).value}'"
       when :send
-        _, operator, arg = return_expression.children
-        "'#{"blah".send(operator, arg.children.last)}'"
+        receiver, operator, param = return_expression.children
+        arg = find_arg(receiver.children.last)
+        "'#{arg.value.send(operator, param.children.last)}'"
       else
         binding.irb
         raise "unhandled type: #{return_expression.type}"
       end
+    end
+
+    def find_arg(name)
+      args.detect { |arg| arg.name == name }
     end
 
     def return_name
@@ -128,8 +151,6 @@ module Buttress
 
       ERB.new(TEMPLATE).result(binding)
     end
-
-
 
   end
 end

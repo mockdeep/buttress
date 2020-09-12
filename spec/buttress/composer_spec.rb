@@ -80,7 +80,7 @@ RSpec.describe Buttress::Composer, '#call' do
         it 'returns value' do
           my_class = MyClass.new
 
-          my_class.call_me('blah').should == 'blah'
+          my_class.call_me('blah1').should == 'blah1'
         end
       end
     RUBY
@@ -102,7 +102,7 @@ RSpec.describe Buttress::Composer, '#call' do
         it 'returns value1' do
           my_class = MyClass.new
 
-          my_class.call_me('blah', 'blah').should == 'blah'
+          my_class.call_me('blah1', 'blah2').should == 'blah1'
         end
       end
     RUBY
@@ -124,7 +124,29 @@ RSpec.describe Buttress::Composer, '#call' do
         it 'returns value * 2' do
           my_class = MyClass.new
 
-          my_class.call_me('blah').should == 'blahblah'
+          my_class.call_me('blah1').should == 'blah1blah1'
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
+  end
+
+  it 'returns test code for when method returns new value for second argument' do
+    code = <<~RUBY
+      class MyClass
+        def call_me(value1, value2)
+          value2 * 2
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      describe MyClass, '#call_me' do
+        it 'returns value2 * 2' do
+          my_class = MyClass.new
+
+          my_class.call_me('blah1', 'blah2').should == 'blah2blah2'
         end
       end
     RUBY
