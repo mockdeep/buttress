@@ -50,6 +50,79 @@ module Buttress
     end
   end
 
+  class ReturnExpression < BaseNode
+    def find_arg(arg_name)
+      parent_node.find_arg(arg_name)
+    end
+
+    def return_value
+      case raw_node.type
+      when :true
+        'true'
+      when :str
+        "'#{raw_node.children.last}'"
+      when :int
+        raw_node.children.last.to_s
+      when :lvar
+        "'#{find_arg(raw_node.children.last).value}'"
+      when :send
+        receiver, operator, param = raw_node.children
+        arg = find_arg(receiver.children.last)
+        "'#{arg.value.send(operator, param.children.last)}'"
+      else
+        binding.irb
+        raise "unhandled type: #{raw_node.type}"
+      end
+    end
+
+    def return_name
+      case raw_node.type
+      when :true
+        'true'
+      when :str
+        "'#{raw_node.children.last}'"
+      when :int
+        raw_node.children.last.to_s
+      when :lvar
+        raw_node.children.last.to_s
+      when :send
+        receiver, operator, param = raw_node.children
+        "#{receiver.children.last} #{operator} #{param.children.last}"
+      else
+        binding.irb
+        raise "unhandled type: #{raw_node.type}"
+      end
+    end
+
+    def conditions
+      [Condition.new(self)]
+    end
+
+    def method_call
+      parent_node.method_call
+    end
+  end
+
+  class Condition
+    attr_accessor :return_expression
+
+    def initialize(return_expression)
+      self.return_expression = return_expression
+    end
+
+    def description
+      "returns #{return_expression.return_name.gsub("'", '"')}"
+    end
+
+    def return_value
+      return_expression.return_value
+    end
+
+    def method_call
+      return_expression.method_call
+    end
+  end
+
   class MethodNode < BaseNode
     def method_call
       if args.any?
@@ -69,25 +142,16 @@ module Buttress
       raw_node.children.first.to_s
     end
 
+    def return_expression
+      ReturnExpression.new(raw_node.children.last, parent_node: self)
+    end
+
+    def conditions
+      return_expression.conditions
+    end
+
     def return_value
-      return_expression = raw_node.children.last
-      case return_expression.type
-      when :true
-        'true'
-      when :str
-        "'#{return_expression.children.last}'"
-      when :int
-        return_expression.children.last.to_s
-      when :lvar
-        "'#{find_arg(return_expression.children.last).value}'"
-      when :send
-        receiver, operator, param = return_expression.children
-        arg = find_arg(receiver.children.last)
-        "'#{arg.value.send(operator, param.children.last)}'"
-      else
-        binding.irb
-        raise "unhandled type: #{return_expression.type}"
-      end
+      return_expression.return_value
     end
 
     def find_arg(name)
@@ -95,23 +159,7 @@ module Buttress
     end
 
     def return_name
-      return_expression = raw_node.children.last
-      case return_expression.type
-      when :true
-        'true'
-      when :str
-        "'#{return_expression.children.last}'"
-      when :int
-        return_expression.children.last.to_s
-      when :lvar
-        return_expression.children.last.to_s
-      when :send
-        receiver, operator, arg = return_expression.children
-        "#{receiver.children.last} #{operator} #{arg.children.last}"
-      else
-        binding.irb
-        raise "unhandled type: #{return_expression.type}"
-      end
+      return_expression.return_name
     end
   end
 
@@ -149,7 +197,7 @@ module Buttress
       class_node = root_node.find_class(class_name)
       method_node = class_node.find_method(method_name)
 
-      ERB.new(TEMPLATE).result(binding)
+      ERB.new(TEMPLATE, nil, '-').result(binding)
     end
 
   end

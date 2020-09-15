@@ -1,7 +1,9 @@
 describe <%= class_node.name %>, '#<%= method_node.name %>' do
-  it 'returns <%= method_node.return_name.gsub("'", '"') %>' do
+<% method_node.conditions.each do |condition| -%>
+  it '<%= condition.description %>' do
     <%= class_node.instance_name %> = <%= class_node.name %>.new
 
-    <%= class_node.instance_name %>.<%= method_node.method_call %>.should == <%= method_node.return_value %>
+    <%= class_node.instance_name %>.<%= condition.method_call %>.should == <%= condition.return_value %>
   end
+<% end -%>
 end
