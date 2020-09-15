@@ -1,4 +1,8 @@
 class Condition
+  extend Forwardable
+
+  delegate [:return_name, :return_value, :method_call] => :return_expression
+
   attr_accessor :return_expression
 
   def initialize(return_expression)
@@ -6,14 +10,6 @@ class Condition
   end
 
   def description
-    "returns #{return_expression.return_name.gsub("'", '"')}"
-  end
-
-  def return_value
-    return_expression.return_value
-  end
-
-  def method_call
-    return_expression.method_call
+    "returns #{return_name.gsub("'", '"')}"
   end
 end

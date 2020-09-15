@@ -1,4 +1,8 @@
 class BaseNode
+  extend Forwardable
+
+  delegate [:children, :type] => :raw_node
+
   attr_accessor :raw_node, :parent_node
 
   def initialize(raw_node, parent_node: nil)

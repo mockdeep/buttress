@@ -11,6 +11,6 @@ class ArgumentNode < BaseNode
   end
 
   def name
-    raw_node.children.last
+    children.last
   end
 end
