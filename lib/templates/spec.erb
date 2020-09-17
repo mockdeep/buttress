@@ -1,9 +1,9 @@
-describe <%= class_node.name %>, '#<%= method_node.name %>' do
-<% method_node.conditions.each do |condition| -%>
-  it '<%= condition.description %>' do
-    <%= class_node.instance_name %> = <%= class_node.name %>.new
+describe <%= class_name %>, '#<%= method_name %>' do
+<% flow_tree.flows.each do |flow| -%>
+  it '<%= flow.description %>' do
+    <%= flow.instance_name %> = <%= flow.class_name %>.new
 
-    <%= class_node.instance_name %>.<%= condition.method_call %>.should == <%= condition.return_value %>
+    <%= flow.instance_name %>.<%= flow.method_call %>.should == <%= flow.return_value %>
   end
 <% end -%>
 end
