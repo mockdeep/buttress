@@ -22,6 +22,7 @@ RSpec.describe Buttress::Target do
     expect(target.describe).to eq('describe')
     expect(target.assertion('foo.bar', "'baz'"))
       .to eq("foo.bar.should == 'baz'")
+    expect(target.skip('a reason')).to eq("pending 'a reason'")
   end
 
   it 'renders the modern dialect for the default target' do
@@ -30,6 +31,7 @@ RSpec.describe Buttress::Target do
     expect(target.describe).to eq('RSpec.describe')
     expect(target.assertion('foo.bar', "'baz'"))
       .to eq("expect(foo.bar).to eq('baz')")
+    expect(target.skip('a reason')).to eq("skip 'a reason'")
   end
 
   it 'raises a Buttress::Error for an unsupported version' do

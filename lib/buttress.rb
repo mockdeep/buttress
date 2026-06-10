@@ -1,7 +1,12 @@
 require 'forwardable'
 
+module Buttress
+  class Error < StandardError; end
+end
+
 require_relative "buttress/version"
 require_relative "buttress/literal"
+require_relative "buttress/evaluator"
 require_relative "buttress/predicate"
 require_relative "buttress/path_enumerator"
 require_relative "buttress/node/base_node"
@@ -17,8 +22,3 @@ require_relative "buttress/composer"
 require_relative "buttress/loader"
 require_relative "buttress/writer"
 require_relative "buttress/runner"
-
-module Buttress
-  class Error < StandardError; end
-  # Your code goes here...
-end

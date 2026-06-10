@@ -60,6 +60,13 @@ module Buttress
       end
     end
 
+    # RSpec 3 fails a pending example whose body passes, so modern targets
+    # get skip; legacy RSpec predates skip, so they get pending.
+    def skip(reason)
+      message = reason.gsub("'", '"')
+      legacy_rspec? ? "pending '#{message}'" : "skip '#{message}'"
+    end
+
     private
 
     def legacy_rspec?

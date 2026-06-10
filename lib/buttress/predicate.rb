@@ -35,12 +35,25 @@ module Buttress
       when :query
         state = QUERY_STATES.fetch(operator)
         "#{name} is #{polarity ? state : "not #{state}"}"
+      when :unsupported
+        polarity ? source : "!(#{source})"
       end
     end
 
     def bindings
+      return {} unless solvable?
+
       value = solve
       UNCONSTRAINED.equal?(value) ? {} : { name => value }
+    end
+
+    def solvable?
+      form != :unsupported
+    end
+
+    def source
+      cleaned = node.location&.expression&.source&.gsub("'", '"')
+      cleaned || "(#{node.type})"
     end
 
     private
@@ -53,11 +66,18 @@ module Buttress
       return :truthiness if node.type == :lvar
 
       if node.type == :send && node.children.first&.type == :lvar
-        return :comparison if COMPARISON_NEGATIONS.key?(operator) && literal_node
+        return :comparison if comparison?
         return :query if QUERY_STATES.key?(operator) && node.children[2].nil?
       end
 
-      raise Error, "cannot solve predicate of type #{node.type}"
+      :unsupported
+    end
+
+    def comparison?
+      return false unless COMPARISON_NEGATIONS.key?(operator) && literal_node
+
+      # Ordered comparisons are only solvable against integers.
+      %i[== !=].include?(operator) || literal.is_a?(Integer)
     end
 
     def literal_node
@@ -73,22 +93,11 @@ module Buttress
       end
     end
 
+    # Boundary values: the smallest move that crosses the comparison.
     def solve_comparison
       case operator
       when :== then polarity ? literal : other_value
       when :'!=' then polarity ? other_value : literal
-      else solve_ordered
-      end
-    end
-
-    # Boundary values: the smallest move that crosses the comparison.
-    def solve_ordered
-      unless literal.is_a?(Integer)
-        raise Error,
-              "cannot solve predicate: #{name} #{operator} #{literal.inspect}"
-      end
-
-      case operator
       when :> then polarity ? literal + 1 : literal
       when :>= then polarity ? literal : literal - 1
       when :< then polarity ? literal - 1 : literal

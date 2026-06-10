@@ -37,7 +37,27 @@ class Condition
     )
   end
 
+  # Why this path's test must be skipped, or nil when a concrete
+  # assertion could be generated.
+  def skip_reason
+    return @skip_reason if defined?(@skip_reason)
+
+    @skip_reason = compute_skip_reason
+  end
+
   private
+
+  def compute_skip_reason
+    unsolved = path.predicates.reject(&:solvable?)
+    if unsolved.any?
+      return "Buttress cannot solve: #{unsolved.map(&:source).join(', ')}"
+    end
+
+    return_value
+    nil
+  rescue Buttress::CannotEvaluate => error
+    "Buttress cannot yet evaluate: #{error.message}"
+  end
 
   # Argument values for this path: defaults, overridden by whatever the
   # path's predicates require.

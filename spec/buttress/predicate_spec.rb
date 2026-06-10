@@ -69,16 +69,19 @@ RSpec.describe Buttress::Predicate do
       expect(described_class.new(query(:nil?), false).bindings).to eq({})
     end
 
-    it 'raises for ordered comparison against a string literal' do
-      expect { described_class.new(comparison(:>, 'abc'), true).bindings }
-        .to raise_error(Buttress::Error, /cannot solve predicate/)
+    it 'is unsolvable for ordered comparison against a string literal' do
+      predicate = described_class.new(comparison(:>, 'abc'), true)
+
+      expect(predicate.solvable?).to eq(false)
+      expect(predicate.bindings).to eq({})
     end
 
-    it 'raises for an unsupported predicate form' do
+    it 'is unsolvable for an unsupported predicate form' do
       node = Parser::AST::Node.new(:ivar, [:@value])
+      predicate = described_class.new(node, true)
 
-      expect { described_class.new(node, true).bindings }
-        .to raise_error(Buttress::Error, /cannot solve predicate/)
+      expect(predicate.solvable?).to eq(false)
+      expect(predicate.bindings).to eq({})
     end
   end
 

@@ -1,14 +1,9 @@
 class ClassNode < BaseNode
   def find_method(method_name)
-    MethodNode.new(find_method_node(raw_node, method_name), parent_node: self)
-  end
-
-  def find_method_node(raw_node, method_name)
-    children.detect do |child_node|
-      next unless child_node
-      child_node.type == :def ||
-        child_node.type == :begin && find_method_node(child_node, method_name)
-    end
+    MethodNode.new(
+      find_method_node(raw_node, method_name.to_sym),
+      parent_node: self,
+    )
   end
 
   def name
@@ -20,5 +15,18 @@ class ClassNode < BaseNode
         .gsub(/([A-Z]+)([A-Z][a-z])/, '\1_\2')
         .gsub(/([a-z\d])([A-Z])/, '\1_\2')
         .downcase
+  end
+
+  private
+
+  def find_method_node(node, method_name)
+    return nil unless node.is_a?(Parser::AST::Node)
+    return node if node.type == :def && node.children.first == method_name
+
+    node.children.each do |child|
+      found = find_method_node(child, method_name)
+      return found if found
+    end
+    nil
   end
 end

@@ -4,9 +4,17 @@
 
 <% end -%>
   it '<%= flow.description %>' do
+<% if flow.skip_reason -%>
+    <%= target.skip(flow.skip_reason) %>
+
+    <%= flow.instance_name %> = <%= flow.class_name %>.new
+
+    <%= flow.instance_name %>.<%= flow.method_call %>
+<% else -%>
     <%= flow.instance_name %> = <%= flow.class_name %>.new
 
     <%= target.assertion("#{flow.instance_name}.#{flow.method_call}", flow.return_value) %>
+<% end -%>
   end
 <% end -%>
 end

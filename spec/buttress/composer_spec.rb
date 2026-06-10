@@ -483,6 +483,114 @@ RSpec.describe Buttress::Composer, '#call' do
     expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
   end
 
+  it 'evaluates whitelisted core methods in return values' do
+    code = <<~RUBY
+      class MyClass
+        def call_me(value)
+          value.upcase
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe MyClass, '#call_me' do
+        it 'returns value.upcase' do
+          my_class = MyClass.new
+
+          expect(my_class.call_me('blah1')).to eq('BLAH1')
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
+  end
+
+  it 'generates a skipped skeleton when the return value cannot be evaluated' do
+    code = <<~RUBY
+      class MyClass
+        def call_me(value)
+          helper(value)
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe MyClass, '#call_me' do
+        it 'returns helper(value)' do
+          skip 'Buttress cannot yet evaluate: helper(value)'
+
+          my_class = MyClass.new
+
+          my_class.call_me('blah1')
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
+  end
+
+  it 'generates skipped skeletons when a predicate cannot be solved' do
+    code = <<~RUBY
+      class MyClass
+        def call_me(value)
+          if value.even?
+            'even'
+          else
+            'odd'
+          end
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe MyClass, '#call_me' do
+        it 'returns "even" when value.even?' do
+          skip 'Buttress cannot solve: value.even?'
+
+          my_class = MyClass.new
+
+          my_class.call_me('blah1')
+        end
+
+        it 'returns "odd" when !(value.even?)' do
+          skip 'Buttress cannot solve: value.even?'
+
+          my_class = MyClass.new
+
+          my_class.call_me('blah1')
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
+  end
+
+  it 'finds the requested method among several in a class' do
+    code = <<~RUBY
+      class MyClass
+        def other_method
+          'other'
+        end
+
+        def call_me
+          'mine'
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe MyClass, '#call_me' do
+        it 'returns "mine"' do
+          my_class = MyClass.new
+
+          expect(my_class.call_me).to eq('mine')
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
+  end
+
   it 'returns a test per branch for an unless guard' do
     code = <<~RUBY
       class MyClass
