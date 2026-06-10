@@ -16,6 +16,22 @@ RSpec.describe Buttress::Target do
       .to raise_error(Parser::SyntaxError)
   end
 
+  it 'renders the legacy dialect for a 1.8 target' do
+    target = described_class.new('1.8')
+
+    expect(target.describe).to eq('describe')
+    expect(target.assertion('foo.bar', "'baz'"))
+      .to eq("foo.bar.should == 'baz'")
+  end
+
+  it 'renders the modern dialect for the default target' do
+    target = described_class.default
+
+    expect(target.describe).to eq('RSpec.describe')
+    expect(target.assertion('foo.bar', "'baz'"))
+      .to eq("expect(foo.bar).to eq('baz')")
+  end
+
   it 'raises a Buttress::Error for an unsupported version' do
     expect { described_class.new('0.9') }
       .to raise_error(Buttress::Error, /unsupported target Ruby version/)

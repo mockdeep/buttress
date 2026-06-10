@@ -1,4 +1,4 @@
-describe <%= class_name %>, '#<%= method_name %>' do
+<%= target.describe %> <%= class_name %>, '#<%= method_name %>' do
 <% flow_tree.flows.each_with_index do |flow, index| -%>
 <% if index.positive? -%>
 
@@ -6,7 +6,7 @@ describe <%= class_name %>, '#<%= method_name %>' do
   it '<%= flow.description %>' do
     <%= flow.instance_name %> = <%= flow.class_name %>.new
 
-    <%= flow.instance_name %>.<%= flow.method_call %>.should == <%= flow.return_value %>
+    <%= target.assertion("#{flow.instance_name}.#{flow.method_call}", flow.return_value) %>
   end
 <% end -%>
 end

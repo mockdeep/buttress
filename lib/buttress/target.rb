@@ -39,11 +39,32 @@ module Buttress
                    "(supported: #{PARSERS.keys.join(', ')})"
     end
 
+    # Versions from the RSpec 1.x/2.x era get the classic dialect (bare
+    # describe, should syntax); everything newer gets the modern dialect
+    # (RSpec.describe, expect syntax).
+    LEGACY_RSPEC_VERSIONS = %w[1.8 1.9].freeze
+
     def parse(code)
       parser.parse(Parser::Source::Buffer.new('(buttress)', source: code))
     end
 
+    def describe
+      legacy_rspec? ? 'describe' : 'RSpec.describe'
+    end
+
+    def assertion(actual, expected)
+      if legacy_rspec?
+        "#{actual}.should == #{expected}"
+      else
+        "expect(#{actual}).to eq(#{expected})"
+      end
+    end
+
     private
+
+    def legacy_rspec?
+      LEGACY_RSPEC_VERSIONS.include?(version)
+    end
 
     # A parser that raises on syntax errors without also printing
     # diagnostics to stderr, unlike the Parser::Base.parse shortcut.

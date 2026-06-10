@@ -10,11 +10,11 @@ RSpec.describe Buttress::Composer, '#call' do
     RUBY
 
     expected_tests = <<~RUBY
-      describe MyClass, '#call_me' do
+      RSpec.describe MyClass, '#call_me' do
         it 'returns true' do
           my_class = MyClass.new
 
-          my_class.call_me.should == true
+          expect(my_class.call_me).to eq(true)
         end
       end
     RUBY
@@ -22,7 +22,7 @@ RSpec.describe Buttress::Composer, '#call' do
     expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
   end
 
-  it 'generates the same test code under a Ruby 1.8 target' do
+  it 'generates should-syntax assertions under a Ruby 1.8 target' do
     code = <<~RUBY
       class MyClass
         def call_me
@@ -56,11 +56,11 @@ RSpec.describe Buttress::Composer, '#call' do
     RUBY
 
     expected_tests = <<~RUBY
-      describe MyClass, '#call_me' do
+      RSpec.describe MyClass, '#call_me' do
         it 'returns "blah"' do
           my_class = MyClass.new
 
-          my_class.call_me.should == 'blah'
+          expect(my_class.call_me).to eq('blah')
         end
       end
     RUBY
@@ -78,11 +78,11 @@ RSpec.describe Buttress::Composer, '#call' do
     RUBY
 
     expected_tests = <<~RUBY
-      describe MyClass, '#call_me' do
+      RSpec.describe MyClass, '#call_me' do
         it 'returns 5' do
           my_class = MyClass.new
 
-          my_class.call_me.should == 5
+          expect(my_class.call_me).to eq(5)
         end
       end
     RUBY
@@ -100,11 +100,11 @@ RSpec.describe Buttress::Composer, '#call' do
     RUBY
 
     expected_tests = <<~RUBY
-      describe MyClass, '#call_me' do
+      RSpec.describe MyClass, '#call_me' do
         it 'returns value' do
           my_class = MyClass.new
 
-          my_class.call_me('blah1').should == 'blah1'
+          expect(my_class.call_me('blah1')).to eq('blah1')
         end
       end
     RUBY
@@ -122,11 +122,11 @@ RSpec.describe Buttress::Composer, '#call' do
     RUBY
 
     expected_tests = <<~RUBY
-      describe MyClass, '#call_me' do
+      RSpec.describe MyClass, '#call_me' do
         it 'returns value1' do
           my_class = MyClass.new
 
-          my_class.call_me('blah1', 'blah2').should == 'blah1'
+          expect(my_class.call_me('blah1', 'blah2')).to eq('blah1')
         end
       end
     RUBY
@@ -144,11 +144,11 @@ RSpec.describe Buttress::Composer, '#call' do
     RUBY
 
     expected_tests = <<~RUBY
-      describe MyClass, '#call_me' do
+      RSpec.describe MyClass, '#call_me' do
         it 'returns value * 2' do
           my_class = MyClass.new
 
-          my_class.call_me('blah1').should == 'blah1blah1'
+          expect(my_class.call_me('blah1')).to eq('blah1blah1')
         end
       end
     RUBY
@@ -166,11 +166,11 @@ RSpec.describe Buttress::Composer, '#call' do
     RUBY
 
     expected_tests = <<~RUBY
-      describe MyClass, '#call_me' do
+      RSpec.describe MyClass, '#call_me' do
         it 'returns value2 * 2' do
           my_class = MyClass.new
 
-          my_class.call_me('blah1', 'blah2').should == 'blah2blah2'
+          expect(my_class.call_me('blah1', 'blah2')).to eq('blah2blah2')
         end
       end
     RUBY
@@ -192,17 +192,17 @@ RSpec.describe Buttress::Composer, '#call' do
     RUBY
 
     expected_tests = <<~RUBY
-      describe MyClass, '#call_me' do
+      RSpec.describe MyClass, '#call_me' do
         it 'returns "yes" when value is true' do
           my_class = MyClass.new
 
-          my_class.call_me(true).should == 'yes'
+          expect(my_class.call_me(true)).to eq('yes')
         end
 
         it 'returns "no" when value is false' do
           my_class = MyClass.new
 
-          my_class.call_me(false).should == 'no'
+          expect(my_class.call_me(false)).to eq('no')
         end
       end
     RUBY
@@ -221,17 +221,17 @@ RSpec.describe Buttress::Composer, '#call' do
     RUBY
 
     expected_tests = <<~RUBY
-      describe MyClass, '#call_me' do
+      RSpec.describe MyClass, '#call_me' do
         it 'returns "yes" when value is true' do
           my_class = MyClass.new
 
-          my_class.call_me(true).should == 'yes'
+          expect(my_class.call_me(true)).to eq('yes')
         end
 
         it 'returns "no" when value is false' do
           my_class = MyClass.new
 
-          my_class.call_me(false).should == 'no'
+          expect(my_class.call_me(false)).to eq('no')
         end
       end
     RUBY
@@ -249,17 +249,17 @@ RSpec.describe Buttress::Composer, '#call' do
     RUBY
 
     expected_tests = <<~RUBY
-      describe MyClass, '#call_me' do
+      RSpec.describe MyClass, '#call_me' do
         it 'returns "yes" when value is true' do
           my_class = MyClass.new
 
-          my_class.call_me(true).should == 'yes'
+          expect(my_class.call_me(true)).to eq('yes')
         end
 
         it 'returns "no" when value is false' do
           my_class = MyClass.new
 
-          my_class.call_me(false).should == 'no'
+          expect(my_class.call_me(false)).to eq('no')
         end
       end
     RUBY
@@ -283,23 +283,23 @@ RSpec.describe Buttress::Composer, '#call' do
     RUBY
 
     expected_tests = <<~RUBY
-      describe MyClass, '#call_me' do
+      RSpec.describe MyClass, '#call_me' do
         it 'returns "one" when first is true' do
           my_class = MyClass.new
 
-          my_class.call_me(true, 'blah2').should == 'one'
+          expect(my_class.call_me(true, 'blah2')).to eq('one')
         end
 
         it 'returns "two" when first is false and second is true' do
           my_class = MyClass.new
 
-          my_class.call_me(false, true).should == 'two'
+          expect(my_class.call_me(false, true)).to eq('two')
         end
 
         it 'returns "three" when first is false and second is false' do
           my_class = MyClass.new
 
-          my_class.call_me(false, false).should == 'three'
+          expect(my_class.call_me(false, false)).to eq('three')
         end
       end
     RUBY
@@ -317,17 +317,17 @@ RSpec.describe Buttress::Composer, '#call' do
     RUBY
 
     expected_tests = <<~RUBY
-      describe MyClass, '#call_me' do
+      RSpec.describe MyClass, '#call_me' do
         it 'returns "yes" when value is true' do
           my_class = MyClass.new
 
-          my_class.call_me(true).should == 'yes'
+          expect(my_class.call_me(true)).to eq('yes')
         end
 
         it 'returns nil when value is false' do
           my_class = MyClass.new
 
-          my_class.call_me(false).should == nil
+          expect(my_class.call_me(false)).to eq(nil)
         end
       end
     RUBY
@@ -346,17 +346,17 @@ RSpec.describe Buttress::Composer, '#call' do
     RUBY
 
     expected_tests = <<~RUBY
-      describe MyClass, '#call_me' do
+      RSpec.describe MyClass, '#call_me' do
         it 'returns "yes" when value is true' do
           my_class = MyClass.new
 
-          my_class.call_me(true).should == 'yes'
+          expect(my_class.call_me(true)).to eq('yes')
         end
 
         it 'returns "no" when value is false' do
           my_class = MyClass.new
 
-          my_class.call_me(false).should == 'no'
+          expect(my_class.call_me(false)).to eq('no')
         end
       end
     RUBY
