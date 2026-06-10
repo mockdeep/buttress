@@ -1,6 +1,9 @@
 require 'forwardable'
 
 require_relative "buttress/version"
+require_relative "buttress/literal"
+require_relative "buttress/predicate"
+require_relative "buttress/path_enumerator"
 require_relative "buttress/node/base_node"
 require_relative "buttress/node/argument_node"
 require_relative "buttress/node/class_node"

@@ -1,5 +1,8 @@
 describe <%= class_name %>, '#<%= method_name %>' do
-<% flow_tree.flows.each do |flow| -%>
+<% flow_tree.flows.each_with_index do |flow, index| -%>
+<% if index.positive? -%>
+
+<% end -%>
   it '<%= flow.description %>' do
     <%= flow.instance_name %> = <%= flow.class_name %>.new
 

@@ -1,20 +1,27 @@
 class ReturnExpression < BaseNode
-  delegate [:find_arg, :method_call] => :parent_node
+  attr_accessor :bindings
+
+  def initialize(raw_node, parent_node:, bindings: {})
+    super(raw_node, parent_node: parent_node)
+    self.bindings = bindings
+  end
 
   def return_value
     case type
     when :true
       'true'
+    when :nil
+      'nil'
     when :str
       "'#{children.last}'"
     when :int
       children.last.to_s
     when :lvar
-      "'#{find_arg(children.last).value}'"
+      Buttress::Literal.render(bindings.fetch(children.last))
     when :send
       receiver, operator, param = children
-      arg = find_arg(receiver.children.last)
-      "'#{arg.value.send(operator, param.children.last)}'"
+      value = bindings.fetch(receiver.children.last)
+      Buttress::Literal.render(value.send(operator, param.children.last))
     else
       binding.irb
       raise "unhandled type: #{type}"
@@ -25,6 +32,8 @@ class ReturnExpression < BaseNode
     case type
     when :true
       'true'
+    when :nil
+      'nil'
     when :str
       "'#{children.last}'"
     when :int
@@ -38,9 +47,5 @@ class ReturnExpression < BaseNode
       binding.irb
       raise "unhandled type: #{type}"
     end
-  end
-
-  def conditions
-    [Condition.new(self)]
   end
 end

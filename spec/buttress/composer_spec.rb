@@ -178,4 +178,189 @@ RSpec.describe Buttress::Composer, '#call' do
     expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
   end
 
+  it 'returns a test per branch for an if/else' do
+    code = <<~RUBY
+      class MyClass
+        def call_me(value)
+          if value
+            'yes'
+          else
+            'no'
+          end
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      describe MyClass, '#call_me' do
+        it 'returns "yes" when value is true' do
+          my_class = MyClass.new
+
+          my_class.call_me(true).should == 'yes'
+        end
+
+        it 'returns "no" when value is false' do
+          my_class = MyClass.new
+
+          my_class.call_me(false).should == 'no'
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
+  end
+
+  it 'returns a test per branch for a guard clause' do
+    code = <<~RUBY
+      class MyClass
+        def call_me(value)
+          return 'yes' if value
+          'no'
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      describe MyClass, '#call_me' do
+        it 'returns "yes" when value is true' do
+          my_class = MyClass.new
+
+          my_class.call_me(true).should == 'yes'
+        end
+
+        it 'returns "no" when value is false' do
+          my_class = MyClass.new
+
+          my_class.call_me(false).should == 'no'
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
+  end
+
+  it 'returns a test per branch for a ternary' do
+    code = <<~RUBY
+      class MyClass
+        def call_me(value)
+          value ? 'yes' : 'no'
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      describe MyClass, '#call_me' do
+        it 'returns "yes" when value is true' do
+          my_class = MyClass.new
+
+          my_class.call_me(true).should == 'yes'
+        end
+
+        it 'returns "no" when value is false' do
+          my_class = MyClass.new
+
+          my_class.call_me(false).should == 'no'
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
+  end
+
+  it 'returns a test per branch for an elsif chain' do
+    code = <<~RUBY
+      class MyClass
+        def call_me(first, second)
+          if first
+            'one'
+          elsif second
+            'two'
+          else
+            'three'
+          end
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      describe MyClass, '#call_me' do
+        it 'returns "one" when first is true' do
+          my_class = MyClass.new
+
+          my_class.call_me(true, 'blah2').should == 'one'
+        end
+
+        it 'returns "two" when first is false and second is true' do
+          my_class = MyClass.new
+
+          my_class.call_me(false, true).should == 'two'
+        end
+
+        it 'returns "three" when first is false and second is false' do
+          my_class = MyClass.new
+
+          my_class.call_me(false, false).should == 'three'
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
+  end
+
+  it 'returns a nil test for a guard clause with no fallthrough' do
+    code = <<~RUBY
+      class MyClass
+        def call_me(value)
+          return 'yes' if value
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      describe MyClass, '#call_me' do
+        it 'returns "yes" when value is true' do
+          my_class = MyClass.new
+
+          my_class.call_me(true).should == 'yes'
+        end
+
+        it 'returns nil when value is false' do
+          my_class = MyClass.new
+
+          my_class.call_me(false).should == nil
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
+  end
+
+  it 'returns a test per branch for an unless guard' do
+    code = <<~RUBY
+      class MyClass
+        def call_me(value)
+          return 'no' unless value
+          'yes'
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      describe MyClass, '#call_me' do
+        it 'returns "yes" when value is true' do
+          my_class = MyClass.new
+
+          my_class.call_me(true).should == 'yes'
+        end
+
+        it 'returns "no" when value is false' do
+          my_class = MyClass.new
+
+          my_class.call_me(false).should == 'no'
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
+  end
 end

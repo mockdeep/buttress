@@ -1,10 +1,7 @@
 class MethodNode < BaseNode
-  delegate [:conditions, :return_value, :return_name] => :return_expression
-  def method_call
-    if args.any?
-      "#{name}('#{args.map(&:value).join("', '")}')"
-    else
-      name
+  def conditions
+    Buttress::PathEnumerator.call(children.last).map do |path|
+      Condition.new(self, path)
     end
   end
 
@@ -16,13 +13,5 @@ class MethodNode < BaseNode
 
   def name
     children.first.to_s
-  end
-
-  def return_expression
-    ReturnExpression.new(children.last, parent_node: self)
-  end
-
-  def find_arg(name)
-    args.detect { |arg| arg.name == name }
   end
 end
