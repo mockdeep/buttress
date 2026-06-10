@@ -3,13 +3,19 @@ module Buttress
     attr_accessor :condition, :parent
 
     extend Forwardable
-    delegate [:description, :method_call, :return_value, :skip_reason] =>
-      :condition
-    delegate [:class_name, :instance_name, :target] => :parent
+    delegate [:description, :return_value, :skip_reason] => :condition
+    delegate [:class_name, :instance_name, :target, :method_name] => :parent
 
     def initialize(condition, parent:)
       self.condition = condition
       self.parent = parent
+    end
+
+    def method_call
+      arguments = method_arguments
+      return method_name.to_s if arguments.empty?
+
+      "#{method_name}(#{arguments.join(', ')})"
     end
 
     def constructor_call
@@ -21,15 +27,27 @@ module Buttress
 
     private
 
+    def method_arguments
+      positional = condition.method_positional_values.map do |value|
+        Buttress::Literal.render(value)
+      end
+      positional + rendered_pairs(condition.method_keyword_values)
+    end
+
     def constructor_arguments
       if condition.model?
-        condition.constructor_attributes.map do |name, value|
-          target.hash_pair(name, Buttress::Literal.render(value))
-        end
+        rendered_pairs(condition.constructor_attributes)
       else
-        condition.constructor_values.map do |value|
+        positional = condition.constructor_values.map do |value|
           Buttress::Literal.render(value)
         end
+        positional + rendered_pairs(condition.constructor_keywords)
+      end
+    end
+
+    def rendered_pairs(keywords)
+      keywords.map do |name, value|
+        target.hash_pair(name, Buttress::Literal.render(value))
       end
     end
   end

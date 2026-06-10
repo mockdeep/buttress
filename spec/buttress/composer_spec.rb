@@ -1139,6 +1139,143 @@ RSpec.describe Buttress::Composer, '#call' do
     expect(result).not_to include("describe '#listed' do")
   end
 
+  it 'handles optional keyword parameters in initialize' do
+    code = <<~'RUBY'
+      class MyClass
+        def initialize(name, items: [])
+          @name = name
+          @items = items
+        end
+
+        def call_me
+          "#{@name}: #{@items.size}"
+        end
+      end
+    RUBY
+
+    expected_tests = <<~'RUBY'
+      RSpec.describe MyClass do
+        describe '#call_me' do
+          it 'returns "#{@name}: #{@items.size}"' do
+            my_class = MyClass.new('blah1')
+
+            expect(my_class.call_me).to eq('blah1: 0')
+          end
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass')).to eq(expected_tests)
+  end
+
+  it 'renders required keywords in the constructor' do
+    code = <<~'RUBY'
+      class MyClass
+        def initialize(card_id:, name:)
+          @card_id = card_id
+          @name = name
+        end
+
+        def call_me
+          "#{@card_id}/#{@name}"
+        end
+      end
+    RUBY
+
+    expected_tests = <<~'RUBY'
+      RSpec.describe MyClass, '#call_me' do
+        it 'returns "#{@card_id}/#{@name}"' do
+          my_class = MyClass.new(card_id: 'blah1', name: 'blah2')
+
+          expect(my_class.call_me).to eq('blah1/blah2')
+        end
+      end
+    RUBY
+
+    result = described_class.call(code, 'MyClass', 'call_me')
+    expect(result).to eq(expected_tests)
+  end
+
+  it 'solves predicates on optional keyword parameters' do
+    code = <<~RUBY
+      class MyClass
+        def call_me(value, upcase: false)
+          if upcase
+            value.upcase
+          else
+            value
+          end
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe MyClass, '#call_me' do
+        it 'returns value.upcase when upcase is true' do
+          my_class = MyClass.new
+
+          expect(my_class.call_me('blah1', upcase: true)).to eq('BLAH1')
+        end
+
+        it 'returns value when upcase is false' do
+          my_class = MyClass.new
+
+          expect(my_class.call_me('blah1', upcase: false)).to eq('blah1')
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
+  end
+
+  it 'degrades to a skip when initialize cannot be evaluated' do
+    code = <<~RUBY
+      class MyClass
+        def initialize(data)
+          @data = process(data)
+        end
+
+        def call_me
+          @data
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe MyClass, '#call_me' do
+        it 'returns @data' do
+          skip 'Buttress cannot yet evaluate: process(data)'
+
+          my_class = MyClass.new('blah1')
+
+          my_class.call_me
+        end
+      end
+    RUBY
+
+    result = described_class.call(code, 'MyClass', 'call_me')
+    expect(result).to eq(expected_tests)
+  end
+
+  it 'finds classes nested inside modules and compact names' do
+    code = <<~RUBY
+      module Outer
+        module Inner
+          class MyClass
+            def call_me
+              'nested'
+            end
+          end
+        end
+      end
+    RUBY
+
+    result = described_class.call(code, 'Outer::Inner::MyClass', 'call_me')
+
+    expect(result).to include("RSpec.describe Outer::Inner::MyClass, '#call_me' do")
+    expect(result).to include("expect(my_class.call_me).to eq('nested')")
+  end
+
   it 'returns a test per branch for an unless guard' do
     code = <<~RUBY
       class MyClass

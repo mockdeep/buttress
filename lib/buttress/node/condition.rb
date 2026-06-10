@@ -2,10 +2,6 @@
 # argument values that steer execution down the path, the call that
 # exercises it, and the value it returns.
 class Condition
-  extend Forwardable
-
-  delegate [:return_value, :return_name] => :return_expression
-
   attr_accessor :method_node, :path, :schema
 
   def initialize(method_node, path, schema: nil)
@@ -21,22 +17,32 @@ class Condition
     "#{base} when #{path.predicates.map(&:description).join(' and ')}"
   end
 
-  def method_call
-    return method_node.name unless method_node.args.any?
-
-    rendered_args = method_node.args.map do |arg|
-      Buttress::Literal.render(bindings.fetch(arg.name))
-    end
-    "#{method_node.name}(#{rendered_args.join(', ')})"
+  def return_name
+    path.return_node&.location&.expression&.source || 'nil'
   end
 
-  def return_expression
-    @return_expression ||= ReturnExpression.new(
-      path.return_node || nil_node,
-      parent_node: method_node,
-      bindings: env,
-      evaluator: evaluator,
+  def return_value
+    @return_value ||= Buttress::Literal.render(
+      evaluator.call(path.return_node || nil_node, env),
     )
+  end
+
+  # Values for the method call's required positional parameters.
+  def method_positional_values
+    method_node.args
+      .select { |param| param.type == :arg }
+      .map { |param| bindings.fetch(param.name) }
+  end
+
+  # Keyword arguments the method call must pass: required keywords
+  # always, optional keywords only when a predicate constrains them
+  # (otherwise the method's declared default applies).
+  def method_keyword_values
+    params = method_node.args.select do |param|
+      param.type == :kwarg ||
+        (param.type == :kwoptarg && constrained_names.include?(param.name))
+    end
+    params.to_h { |param| [param.name, bindings.fetch(param.name)] }
   end
 
   # Whether the class under test is a database-backed model.
@@ -44,9 +50,18 @@ class Condition
     !columns.nil?
   end
 
-  # Positional argument values for instantiating a plain class.
+  # Values for initialize's required positional parameters.
   def constructor_values
-    @constructor_values ||= constructor_params.map(&:value)
+    @constructor_values ||= constructor_params
+      .select { |param| param.type == :arg }
+      .map(&:value)
+  end
+
+  # Values for initialize's required keyword parameters.
+  def constructor_keywords
+    @constructor_keywords ||= constructor_params
+      .select { |param| param.type == :kwarg }
+      .to_h { |param| [param.name, param.value] }
   end
 
   # Attribute values for instantiating a model. Only meaningful after
@@ -72,8 +87,8 @@ class Condition
       return "Buttress cannot solve: #{unsolved.map(&:source).join(', ')}"
     end
 
-    # A predicate on something that is neither an argument nor a model
-    # attribute can't be steered from the outside, and pretending
+    # A predicate on something that is neither a settable argument nor a
+    # model attribute can't be steered from the outside, and pretending
     # otherwise would assert the wrong branch.
     foreign = path.predicates.reject do |predicate|
       controllable_names.include?(predicate.variable_name)
@@ -95,25 +110,53 @@ class Condition
     "Buttress cannot yet evaluate: #{error.message}"
   end
 
-  def arg_names
-    @arg_names ||= method_node.args.map(&:name)
+  def constrained_names
+    @constrained_names ||=
+      path.predicates.select(&:solvable?).map(&:variable_name)
   end
 
+  # Optional positional parameters are excluded: constraining one means
+  # rendering every preceding optional too, which isn't supported yet.
   def controllable_names
-    arg_names + (columns ? columns.keys : [])
+    settable = method_node.args.select do |param|
+      %i[arg kwarg kwoptarg].include?(param.type)
+    end
+    settable.map(&:name) + (columns ? columns.keys : [])
   end
 
-  # Argument values for this path: defaults, overridden by whatever the
-  # path's predicates require of the method's arguments.
+  # Argument values for this path: declared or generated defaults,
+  # overridden by whatever the path's predicates require of the
+  # method's parameters.
   def bindings
     @bindings ||= begin
-      defaults = method_node.args.to_h { |arg| [arg.name, arg.value] }
+      defaults = {}
+      method_node.args.each { |param| assign_default(defaults, param) }
+
       constraints = path.predicates
         .select(&:solvable?)
         .select { |predicate| defaults.key?(predicate.variable_name) }
         .map(&:bindings)
       defaults.merge(*constraints)
     end
+  end
+
+  # A parameter whose declared default can't be evaluated gets no
+  # binding at all, so reading it degrades to a skip instead of using a
+  # wrong value.
+  def assign_default(defaults, param)
+    case param.type
+    when :arg, :kwarg
+      defaults[param.name] = param.value
+    when :optarg, :kwoptarg
+      defaults[param.name] =
+        Buttress::Evaluator.call(param.children.last, defaults)
+    when :restarg
+      defaults[param.name] = [] if param.name
+    when :kwrestarg
+      defaults[param.name] = {} if param.name
+    end
+  rescue Buttress::CannotEvaluate
+    nil
   end
 
   # The environment at the end of the path: argument values plus the
@@ -160,7 +203,9 @@ class Condition
       class_node: class_node,
       model_attributes: model? ? attribute_store : nil,
     ).tap do |evaluator|
-      evaluator.run_initialize(constructor_values) unless model?
+      unless model?
+        evaluator.run_initialize(constructor_values, constructor_keywords)
+      end
     end
   end
 

@@ -1,21 +1,28 @@
 class RootNode < BaseNode
   def find_class(class_name)
-    ClassNode.new(find_class_node(raw_node, class_name))
+    node = find_class_node(raw_node, class_name.split('::').last)
+    raise Buttress::Error, "class not found: #{class_name}" unless node
+
+    ClassNode.new(node)
   end
 
-  def find_class_node(node, class_name)
-    return unless node
-    return node if node.type == :class &&
-      node.children.first.children.last.to_s == class_name
+  private
 
-    current_node = node
-    class_name.split('::').each do |name_part|
-      current_node = current_node.children.detect do |child|
-        next unless child
-        child.type == :class &&
-        child.children.first.children.last.to_s == name_part
-      end
+  # Finds a class definition by the last segment of its name, however
+  # deeply nested in modules or written with a compact qualified name
+  # (class Foo::Bar::Baz).
+  def find_class_node(node, basename)
+    return nil unless node.is_a?(Parser::AST::Node)
+
+    if node.type == :class &&
+       node.children.first.children.last.to_s == basename
+      return node
     end
-    current_node
+
+    node.children.each do |child|
+      found = find_class_node(child, basename)
+      return found if found
+    end
+    nil
   end
 end

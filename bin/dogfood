@@ -1,0 +1,105 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Runs buttress across every class in a directory and tallies the
+# results: how many paths generate concrete tests, how many degrade to
+# skips (grouped by reason), and what crashes outright. The output is an
+# evidence-ranked backlog. Nothing is written to disk.
+#
+# usage: bin/dogfood DIR [TARGET_RUBY_VERSION]
+
+require_relative "../lib/buttress"
+
+dir = ARGV.first or abort "usage: bin/dogfood DIR [TARGET_RUBY_VERSION]"
+target = Buttress::Target.new(ARGV[1])
+
+def qualified_class_names(node, namespace = [], found = [])
+  return found unless node.is_a?(Parser::AST::Node)
+
+  case node.type
+  when :class, :module
+    name_node = node.children.first
+    segments = []
+    while name_node.is_a?(Parser::AST::Node) && name_node.type == :const
+      segments.unshift(name_node.children.last.to_s)
+      name_node = name_node.children.first
+    end
+    qualified = namespace + segments
+    found << qualified.join("::") if node.type == :class
+    node.children.drop(1).each do |child|
+      qualified_class_names(child, qualified, found)
+    end
+  else
+    node.children.each do |child|
+      qualified_class_names(child, namespace, found)
+    end
+  end
+  found
+end
+
+stats = Hash.new(0)
+skips = Hash.new(0)
+crashes = Hash.new { |hash, key| hash[key] = [] }
+
+Dir.glob(File.join(dir, "**", "*.rb")).sort.each do |file|
+  code = File.read(file)
+  begin
+    root = RootNode.new(target.parse(code))
+  rescue StandardError => error
+    crashes["parse: #{error.message[0, 100]}"] << file
+    next
+  end
+
+  qualified_class_names(root.raw_node).uniq.each do |class_name|
+    begin
+      class_node = root.find_class(class_name)
+    rescue StandardError => error
+      crashes["find_class: #{error.message[0, 100]}"] << class_name
+      next
+    end
+
+    stats[:classes] += 1
+
+    class_node.public_method_names.each do |method_name|
+      stats[:methods] += 1
+      begin
+        output = Buttress::Composer.call(
+          code, class_name, method_name.to_s, target: target,
+        )
+      rescue StandardError => error
+        stats[:crashed_methods] += 1
+        message = "#{error.class}: #{error.message[0, 100]}"
+        crashes[message] << "#{class_name}##{method_name}"
+        next
+      end
+
+      tests = output.scan(/^\s*it '/).count
+      skipped = output.scan(/(?:skip|pending) '([^']*)'/).flatten
+      stats[:tests] += tests
+      stats[:skipped] += skipped.count
+      stats[:concrete] += tests - skipped.count
+      skipped.each { |reason| skips[reason] += 1 }
+    end
+  end
+end
+
+puts "=== Totals ==="
+%i[classes methods crashed_methods tests concrete skipped].each do |key|
+  puts format("%-16s %d", key, stats[key])
+end
+
+if stats[:tests].positive?
+  rate = 100.0 * stats[:concrete] / stats[:tests]
+  puts format("concrete rate    %.1f%%", rate)
+end
+
+puts "\n=== Skip reasons (top 25) ==="
+skips.sort_by { |_, count| -count }.first(25).each do |reason, count|
+  puts format("%4d  %s", count, reason)
+end
+
+puts "\n=== Crashes ==="
+crashes.sort_by { |_, sites| -sites.count }.each do |message, sites|
+  puts format("%4d  %s", sites.count, message)
+  sites.first(3).each { |site| puts "        e.g. #{site}" }
+end

@@ -33,14 +33,17 @@ module Buttress
       NilClass => %i[== != nil? to_s to_a to_i inspect],
       TrueClass => %i[== != & | ^ nil? to_s inspect],
       FalseClass => %i[== != & | ^ nil? to_s inspect],
+      # String#[] is deliberately absent: its semantics changed between
+      # 1.8 and 1.9, so it needs version-aware handling first.
       Array => %i[
-        + - * & | == != nil? length size empty? first last reverse sort
+        + - * & | == != nil? [] length size empty? first last reverse sort
         min max
         sum uniq compact flatten include? index join slice take drop
         to_a inspect
       ],
-      Hash => %i[== != nil? length size empty? keys values invert merge
-                 include? key? has_key? has_value? value? to_a inspect],
+      Hash => %i[== != nil? [] fetch length size empty? keys values invert
+                 merge include? key? has_key? has_value? value? to_a
+                 inspect],
     }.freeze
 
     # Interpreted sibling calls deeper than this are assumed to be
@@ -60,9 +63,9 @@ module Buttress
 
     # Interprets the class's initialize method (if any) to populate
     # instance state, using the given argument values.
-    def run_initialize(args)
+    def run_initialize(args, keywords = {})
       init = @class_node&.lookup_method(:initialize)
-      invoke(init, args) if init
+      invoke(init, args, keywords) if init
     end
 
     def call(node, env)
@@ -87,6 +90,14 @@ module Buttress
       when :send then evaluate_send(node, env)
       when :begin
         node.children.map { |child| call(child, env) }.last
+      when :array
+        node.children.map { |child| call(child, env) }
+      when :hash
+        node.children.to_h do |pair|
+          raise CannotEvaluate, source(node) unless pair.type == :pair
+
+          [call(pair.children.first, env), call(pair.children.last, env)]
+        end
       when :dstr
         node.children.map { |part| call(part, env).to_s }.join
       when :and
@@ -158,26 +169,53 @@ module Buttress
       raise CannotEvaluate, source(node)
     end
 
-    def invoke(method, args)
+    def invoke(method, args, keywords = {})
       @depth += 1
       raise CannotEvaluate, "recursion in ##{method.name}" if @depth > MAX_DEPTH
 
       catch(:method_return) do
         body = method.children.last
-        body ? call(body, bind_params(method, args)) : nil
+        body ? call(body, bind_params(method, args, keywords)) : nil
       end
     ensure
       @depth -= 1
     end
 
-    def bind_params(method, args)
-      params = method.args
-      unless params.size == args.size &&
-             params.all? { |param| param.type == :arg }
-        raise CannotEvaluate, "cannot bind arguments for ##{method.name}"
-      end
+    def bind_params(method, args, keywords)
+      env = {}
+      positional = args.dup
 
-      params.zip(args).to_h { |param, value| [param.name, value] }
+      method.args.each do |param|
+        name = param.name
+        case param.type
+        when :arg
+          cannot_bind(method) if positional.empty?
+          env[name] = positional.shift
+        when :optarg
+          env[name] =
+            positional.any? ? positional.shift : call(param.children.last, env)
+        when :kwarg
+          env[name] = keywords.fetch(name) { cannot_bind(method) }
+        when :kwoptarg
+          env[name] = keywords.fetch(name) { call(param.children.last, env) }
+        when :restarg
+          env[name] = positional.dup if name
+          positional.clear
+        when :kwrestarg
+          env[name] = {} if name
+        when :blockarg
+          nil
+        else
+          cannot_bind(method)
+        end
+      end
+      cannot_bind(method) if positional.any?
+
+      env
+    end
+
+    def cannot_bind(method)
+      raise CannotEvaluate, "cannot bind arguments for ##{method.name}"
     end
 
     def apply(receiver, operator, args)

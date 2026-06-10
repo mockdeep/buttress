@@ -10,7 +10,10 @@ class ArgumentNode < BaseNode
     "blah#{position}"
   end
 
+  # The parameter name is the first child for every parameter node type
+  # (arg, optarg, kwarg, kwoptarg, restarg); for optional parameters the
+  # last child is the default value, so children.last would be wrong.
   def name
-    children.last
+    children.first
   end
 end
