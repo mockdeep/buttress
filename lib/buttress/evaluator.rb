@@ -33,6 +33,7 @@ module Buttress
       NilClass => %i[== != nil? to_s to_a to_i inspect],
       TrueClass => %i[== != & | ^ nil? to_s inspect],
       FalseClass => %i[== != & | ^ nil? to_s inspect],
+      ClassReference => %i[== != nil?],
       # String#[] is deliberately absent: its semantics changed between
       # 1.8 and 1.9, so it needs version-aware handling first.
       Array => %i[
@@ -58,6 +59,8 @@ module Buttress
       @class_node = class_node
       @model_attributes = model_attributes
       @ivars = {}
+      @constants = {}
+      @resolving = []
       @depth = 0
     end
 
@@ -88,6 +91,7 @@ module Buttress
         value = node.children.first && call(node.children.first, env)
         throw :method_return, value
       when :send then evaluate_send(node, env)
+      when :const then resolve_constant(node)
       when :begin
         node.children.map { |child| call(child, env) }.last
       when :array
@@ -120,6 +124,41 @@ module Buttress
     def fetch(node, env)
       env.fetch(node.children.last) do
         raise CannotEvaluate, "unbound variable #{node.children.last}"
+      end
+    end
+
+    # An unqualified constant assigned in the class body evaluates to
+    # its defining expression; anything else becomes a symbolic class
+    # reference.
+    def resolve_constant(node)
+      scope, name = node.children
+      if scope.nil? && @class_node
+        return @constants[name] if @constants.key?(name)
+
+        definition = @class_node.lookup_constant(name)
+        if definition
+          raise CannotEvaluate, "circular constant #{name}" if
+            @resolving.include?(name)
+
+          @resolving.push(name)
+          begin
+            return @constants[name] = call(definition, {})
+          ensure
+            @resolving.pop
+          end
+        end
+      end
+
+      ClassReference.new(const_path(node))
+    end
+
+    def const_path(node)
+      scope, name = node.children
+      case scope&.type
+      when nil then name.to_s
+      when :const then "#{const_path(scope)}::#{name}"
+      when :cbase then "::#{name}"
+      else raise CannotEvaluate, source(node)
       end
     end
 

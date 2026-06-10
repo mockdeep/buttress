@@ -148,8 +148,9 @@ class Condition
     when :arg, :kwarg
       defaults[param.name] = param.value
     when :optarg, :kwoptarg
-      defaults[param.name] =
-        Buttress::Evaluator.call(param.children.last, defaults)
+      # Evaluated through the class-aware evaluator so defaults
+      # referencing class constants resolve to their values.
+      defaults[param.name] = evaluator.call(param.children.last, defaults)
     when :restarg
       defaults[param.name] = [] if param.name
     when :kwrestarg

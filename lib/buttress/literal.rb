@@ -5,6 +5,8 @@ module Buttress
       case value
       when String
         "'#{value}'"
+      when Buttress::ClassReference
+        value.path
       else
         value.inspect
       end

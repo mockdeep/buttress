@@ -55,6 +55,18 @@ class ClassNode < BaseNode
     names - [:initialize]
   end
 
+  # The defining expression of a constant assigned in the class body,
+  # or nil.
+  def lookup_constant(const_name)
+    body_statements.each do |stmt|
+      next unless stmt.is_a?(Parser::AST::Node) && stmt.type == :casgn
+
+      scope, name, value = stmt.children
+      return value if scope.nil? && name == const_name
+    end
+    nil
+  end
+
   def attr_readers
     attr_names(:reader)
   end

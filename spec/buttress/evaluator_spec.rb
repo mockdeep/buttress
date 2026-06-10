@@ -219,6 +219,49 @@ RSpec.describe Buttress::Evaluator do
       .to raise_error(Buttress::CannotEvaluate, /datetime/)
   end
 
+  it 'resolves constants assigned in the class body' do
+    class_node = class_node_for(<<~RUBY)
+      class MyClass
+        MAX = 5
+        GREETING = 'hi'
+        ALIASED = GREETING
+      end
+    RUBY
+    evaluator = described_class.new(class_node: class_node)
+
+    expect(evaluator.call(n(:const, nil, :MAX), {})).to eq(5)
+    expect(evaluator.call(n(:const, nil, :ALIASED), {})).to eq('hi')
+  end
+
+  it 'treats unresolvable constants as class references' do
+    qualified = n(:const, n(:const, nil, :Foo), :Bar)
+
+    expect(call(qualified))
+      .to eq(Buttress::ClassReference.new('Foo::Bar'))
+    expect(call(qualified)).not_to eq(Buttress::ClassReference.new('Foo'))
+  end
+
+  it 'compares class references by equality in evaluation' do
+    node = send_node(n(:const, n(:const, nil, :Foo), :Bar),
+                     :==,
+                     n(:const, n(:const, nil, :Foo), :Bar))
+
+    expect(call(node)).to eq(true)
+  end
+
+  it 'raises CannotEvaluate for circular constants' do
+    class_node = class_node_for(<<~RUBY)
+      class MyClass
+        FIRST = SECOND
+        SECOND = FIRST
+      end
+    RUBY
+    evaluator = described_class.new(class_node: class_node)
+
+    expect { evaluator.call(n(:const, nil, :FIRST), {}) }
+      .to raise_error(Buttress::CannotEvaluate, /circular constant/)
+  end
+
   it 'raises CannotEvaluate for runaway recursion' do
     class_node = class_node_for(<<~RUBY)
       class MyClass

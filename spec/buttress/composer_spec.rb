@@ -1276,6 +1276,83 @@ RSpec.describe Buttress::Composer, '#call' do
     expect(result).to include("expect(my_class.call_me).to eq('nested')")
   end
 
+  it 'resolves class constants in return values' do
+    code = <<~'RUBY'
+      class MyClass
+        GREETING = 'Hello'
+
+        def call_me(name)
+          "#{GREETING}, #{name}!"
+        end
+      end
+    RUBY
+
+    expected_tests = <<~'RUBY'
+      RSpec.describe MyClass, '#call_me' do
+        it 'returns "#{GREETING}, #{name}!"' do
+          my_class = MyClass.new
+
+          expect(my_class.call_me('blah1')).to eq('Hello, blah1!')
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
+  end
+
+  it 'resolves constants used as keyword defaults in initialize' do
+    code = <<~RUBY
+      class MyClass
+        DEFAULT_MODE = 'normal'
+
+        def initialize(mode: DEFAULT_MODE)
+          @mode = mode
+        end
+
+        def call_me
+          @mode.upcase
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe MyClass, '#call_me' do
+        it 'returns @mode.upcase' do
+          my_class = MyClass.new
+
+          expect(my_class.call_me).to eq('NORMAL')
+        end
+      end
+    RUBY
+
+    result = described_class.call(code, 'MyClass', 'call_me')
+    expect(result).to eq(expected_tests)
+  end
+
+  it 'renders class-reference constants by their path' do
+    code = <<~RUBY
+      class MyClass
+        DEFAULT = Other::Thing
+
+        def call_me
+          DEFAULT
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe MyClass, '#call_me' do
+        it 'returns DEFAULT' do
+          my_class = MyClass.new
+
+          expect(my_class.call_me).to eq(Other::Thing)
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
+  end
+
   it 'returns a test per branch for an unless guard' do
     code = <<~RUBY
       class MyClass
