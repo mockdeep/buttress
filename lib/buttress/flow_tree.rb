@@ -11,6 +11,14 @@ module Buttress
       self.condition = condition
       self.parent = parent
     end
+
+    def constructor_call
+      args = condition.constructor_values
+      return "#{class_name}.new" if args.empty?
+
+      rendered = args.map { |value| Buttress::Literal.render(value) }
+      "#{class_name}.new(#{rendered.join(', ')})"
+    end
   end
 
   class FlowTree

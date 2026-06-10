@@ -85,6 +85,78 @@ RSpec.describe Buttress::Evaluator do
     expect(call(n(:if, n(:false), str('yes'), nil))).to eq(nil)
   end
 
+  def class_node_for(code)
+    RootNode.new(Buttress::Target.default.parse(code)).find_class('MyClass')
+  end
+
+  it 'invokes sibling methods by interpreting their bodies' do
+    class_node = class_node_for(<<~RUBY)
+      class MyClass
+        def double(number)
+          number * 2
+        end
+      end
+    RUBY
+    evaluator = described_class.new(class_node: class_node)
+    node = send_node(nil, :double, lvar(:value))
+
+    expect(evaluator.call(node, value: 3)).to eq(6)
+  end
+
+  it 'handles early returns inside interpreted bodies' do
+    class_node = class_node_for(<<~RUBY)
+      class MyClass
+        def classify(number)
+          return 'negative' if number < 0
+          'positive'
+        end
+      end
+    RUBY
+    evaluator = described_class.new(class_node: class_node)
+
+    expect(evaluator.call(send_node(nil, :classify, int(-1)), {}))
+      .to eq('negative')
+    expect(evaluator.call(send_node(nil, :classify, int(1)), {}))
+      .to eq('positive')
+  end
+
+  it 'populates instance variables by interpreting initialize' do
+    class_node = class_node_for(<<~RUBY)
+      class MyClass
+        def initialize(name)
+          @name = name
+        end
+
+        def shout
+          @name.upcase
+        end
+      end
+    RUBY
+    evaluator = described_class.new(class_node: class_node)
+    evaluator.run_initialize(['bob'])
+
+    expect(evaluator.call(send_node(nil, :shout), {})).to eq('BOB')
+  end
+
+  it 'raises CannotEvaluate for runaway recursion' do
+    class_node = class_node_for(<<~RUBY)
+      class MyClass
+        def forever(number)
+          forever(number + 1)
+        end
+      end
+    RUBY
+    evaluator = described_class.new(class_node: class_node)
+
+    expect { evaluator.call(send_node(nil, :forever, int(1)), {}) }
+      .to raise_error(Buttress::CannotEvaluate, /recursion in #forever/)
+  end
+
+  it 'raises CannotEvaluate for ivars without a class context' do
+    expect { call(n(:ivar, :@value)) }
+      .to raise_error(Buttress::CannotEvaluate)
+  end
+
   it 'raises CannotEvaluate for non-whitelisted methods' do
     expect { call(send_node(str('abc'), :object_id)) }
       .to raise_error(Buttress::CannotEvaluate, /String#object_id/)

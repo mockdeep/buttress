@@ -1,9 +1,12 @@
 class ClassNode < BaseNode
   def find_method(method_name)
-    MethodNode.new(
-      find_method_node(raw_node, method_name.to_sym),
-      parent_node: self,
-    )
+    lookup_method(method_name) ||
+      raise(Buttress::Error, "method not found: ##{method_name}")
+  end
+
+  def lookup_method(method_name)
+    node = find_method_node(raw_node, method_name.to_sym)
+    node && MethodNode.new(node, parent_node: self)
   end
 
   def name

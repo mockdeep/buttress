@@ -34,7 +34,13 @@ class Condition
       path.return_node || nil_node,
       parent_node: method_node,
       bindings: env,
+      evaluator: evaluator,
     )
+  end
+
+  # Argument values for instantiating the class under test.
+  def constructor_values
+    @constructor_values ||= constructor_params.map(&:value)
   end
 
   # Why this path's test must be skipped, or nil when a concrete
@@ -89,8 +95,26 @@ class Condition
   # effects of the statements executed along the way.
   def env
     @env ||= path.statements.each_with_object(bindings.dup) do |stmt, env|
-      Buttress::Evaluator.call(stmt, env)
+      evaluator.call(stmt, env)
     end
+  end
+
+  def class_node
+    method_node.parent_node
+  end
+
+  def constructor_params
+    init = class_node.lookup_method(:initialize)
+    init ? init.args : []
+  end
+
+  # A class-aware evaluator with instance state populated by
+  # interpreting initialize.
+  def evaluator
+    @evaluator ||=
+      Buttress::Evaluator.new(class_node: class_node).tap do |evaluator|
+        evaluator.run_initialize(constructor_values)
+      end
   end
 
   def nil_node

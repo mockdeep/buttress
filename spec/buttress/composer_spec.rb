@@ -816,6 +816,58 @@ RSpec.describe Buttress::Composer, '#call' do
     expect(result).to include("expect(my_class.call_me(10)).to eq('small')")
   end
 
+  it 'evaluates calls to sibling methods' do
+    code = <<~RUBY
+      class MyClass
+        def call_me(value)
+          helper(value)
+        end
+
+        def helper(value)
+          value.upcase
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe MyClass, '#call_me' do
+        it 'returns helper(value)' do
+          my_class = MyClass.new
+
+          expect(my_class.call_me('blah1')).to eq('BLAH1')
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
+  end
+
+  it 'instantiates through initialize and reads instance variables' do
+    code = <<~'RUBY'
+      class MyClass
+        def initialize(name)
+          @name = name
+        end
+
+        def call_me
+          "Hello, #{@name}!"
+        end
+      end
+    RUBY
+
+    expected_tests = <<~'RUBY'
+      RSpec.describe MyClass, '#call_me' do
+        it 'returns "Hello, #{@name}!"' do
+          my_class = MyClass.new('blah1')
+
+          expect(my_class.call_me).to eq('Hello, blah1!')
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
+  end
+
   it 'returns a test per branch for an unless guard' do
     code = <<~RUBY
       class MyClass

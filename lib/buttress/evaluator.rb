@@ -43,8 +43,25 @@ module Buttress
                  include? key? has_key? has_value? value? to_a inspect],
     }.freeze
 
+    # Interpreted sibling calls deeper than this are assumed to be
+    # runaway recursion.
+    MAX_DEPTH = 50
+
     def self.call(node, env)
       new.call(node, env)
+    end
+
+    def initialize(class_node: nil)
+      @class_node = class_node
+      @ivars = {}
+      @depth = 0
+    end
+
+    # Interprets the class's initialize method (if any) to populate
+    # instance state, using the given argument values.
+    def run_initialize(args)
+      init = @class_node&.lookup_method(:initialize)
+      invoke(init, args) if init
     end
 
     def call(node, env)
@@ -56,6 +73,16 @@ module Buttress
       when :lvar then fetch(node, env)
       when :lvasgn
         env[node.children.first] = call(node.children.last, env)
+      when :ivar
+        # Without an interpreted initialize we can't know instance state.
+        raise CannotEvaluate, source(node) unless @class_node
+
+        @ivars[node.children.first]
+      when :ivasgn
+        @ivars[node.children.first] = call(node.children.last, env)
+      when :return
+        value = node.children.first && call(node.children.first, env)
+        throw :method_return, value
       when :send then evaluate_send(node, env)
       when :begin
         node.children.map { |child| call(child, env) }.last
@@ -86,11 +113,43 @@ module Buttress
 
     def evaluate_send(node, env)
       receiver_node, operator, *arg_nodes = node.children
-      raise CannotEvaluate, source(node) if receiver_node.nil?
+      args = arg_nodes.map { |arg_node| call(arg_node, env) }
+
+      if receiver_node.nil? || receiver_node.type == :self
+        return invoke_sibling(node, operator, args)
+      end
 
       receiver = call(receiver_node, env)
-      args = arg_nodes.map { |arg_node| call(arg_node, env) }
       apply(receiver, operator, args)
+    end
+
+    def invoke_sibling(node, operator, args)
+      method = @class_node&.lookup_method(operator)
+      raise CannotEvaluate, source(node) unless method
+
+      invoke(method, args)
+    end
+
+    def invoke(method, args)
+      @depth += 1
+      raise CannotEvaluate, "recursion in ##{method.name}" if @depth > MAX_DEPTH
+
+      catch(:method_return) do
+        body = method.children.last
+        body ? call(body, bind_params(method, args)) : nil
+      end
+    ensure
+      @depth -= 1
+    end
+
+    def bind_params(method, args)
+      params = method.args
+      unless params.size == args.size &&
+             params.all? { |param| param.type == :arg }
+        raise CannotEvaluate, "cannot bind arguments for ##{method.name}"
+      end
+
+      params.zip(args).to_h { |param, value| [param.name, value] }
     end
 
     def apply(receiver, operator, args)
