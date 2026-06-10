@@ -17,6 +17,44 @@ class ClassNode < BaseNode
     Buttress::Inflector.underscore(name)
   end
 
+  # Names of public instance methods defined in the class body, in
+  # definition order, honoring visibility modifiers. initialize is
+  # never included; it's exercised through instantiation instead.
+  def public_method_names
+    visibility = :public
+    names = []
+
+    body_statements.each do |stmt|
+      next unless stmt.is_a?(Parser::AST::Node)
+
+      case stmt.type
+      when :def
+        names << stmt.children.first if visibility == :public
+      when :send
+        receiver, message, *args = stmt.children
+        next unless receiver.nil? && %i[public protected private].include?(message)
+
+        if args.empty?
+          visibility = message
+        else
+          marked = args.filter_map do |arg|
+            case arg.type
+            when :sym then arg.children.last
+            when :def then arg.children.first
+            end
+          end
+          if message == :public
+            names.concat(marked)
+          else
+            names -= marked
+          end
+        end
+      end
+    end
+
+    names - [:initialize]
+  end
+
   def attr_readers
     attr_names(:reader)
   end

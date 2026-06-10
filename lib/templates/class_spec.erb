@@ -1,0 +1,27 @@
+<%= target.describe %> <%= class_name %> do
+<% flow_trees.each_with_index do |flow_tree, tree_index| -%>
+<% if tree_index.positive? -%>
+
+<% end -%>
+  describe '#<%= flow_tree.method_name %>' do
+<% flow_tree.flows.each_with_index do |flow, index| -%>
+<% if index.positive? -%>
+
+<% end -%>
+    it '<%= flow.description %>' do
+<% if flow.skip_reason -%>
+      <%= target.skip(flow.skip_reason) %>
+
+      <%= flow.instance_name %> = <%= flow.constructor_call %>
+
+      <%= flow.instance_name %>.<%= flow.method_call %>
+<% else -%>
+      <%= flow.instance_name %> = <%= flow.constructor_call %>
+
+      <%= target.assertion("#{flow.instance_name}.#{flow.method_call}", flow.return_value) %>
+<% end -%>
+    end
+<% end -%>
+  end
+<% end -%>
+end

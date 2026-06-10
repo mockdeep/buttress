@@ -1057,6 +1057,88 @@ RSpec.describe Buttress::Composer, '#call' do
     )
   end
 
+  it 'generates a spec for every public method when no method is given' do
+    code = <<~RUBY
+      class MyClass
+        def initialize(name)
+          @name = name
+        end
+
+        def shout
+          @name.upcase
+        end
+
+        def whisper(value)
+          if value
+            'psst'
+          else
+            'nothing'
+          end
+        end
+
+        private
+
+        def hidden
+          'secret'
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe MyClass do
+        describe '#shout' do
+          it 'returns @name.upcase' do
+            my_class = MyClass.new('blah1')
+
+            expect(my_class.shout).to eq('BLAH1')
+          end
+        end
+
+        describe '#whisper' do
+          it 'returns "psst" when value is true' do
+            my_class = MyClass.new('blah1')
+
+            expect(my_class.whisper(true)).to eq('psst')
+          end
+
+          it 'returns "nothing" when value is false' do
+            my_class = MyClass.new('blah1')
+
+            expect(my_class.whisper(false)).to eq('nothing')
+          end
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass')).to eq(expected_tests)
+  end
+
+  it 'excludes methods marked private inline or by name' do
+    code = <<~RUBY
+      class MyClass
+        def visible
+          'yes'
+        end
+
+        private def tucked_away
+          'no'
+        end
+
+        def listed
+          'no'
+        end
+
+        private :listed
+      end
+    RUBY
+
+    result = described_class.call(code, 'MyClass')
+
+    expect(result).to include("describe '#visible' do")
+    expect(result).not_to include('tucked_away')
+    expect(result).not_to include("describe '#listed' do")
+  end
+
   it 'returns a test per branch for an unless guard' do
     code = <<~RUBY
       class MyClass
