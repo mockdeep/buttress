@@ -51,8 +51,9 @@ module Buttress
       new.call(node, env)
     end
 
-    def initialize(class_node: nil)
+    def initialize(class_node: nil, model_attributes: nil)
       @class_node = class_node
+      @model_attributes = model_attributes
       @ivars = {}
       @depth = 0
     end
@@ -130,19 +131,27 @@ module Buttress
       attr_access(node, operator, args)
     end
 
-    # Falls back to attr_reader/attr_writer-declared accessors, which
-    # have no def to interpret.
+    # Falls back to attr_reader/attr_writer-declared accessors and
+    # schema-declared model attributes, which have no def to interpret.
     def attr_access(node, operator, args)
       raise CannotEvaluate, source(node) unless @class_node
 
-      if args.empty? && @class_node.attr_readers.include?(operator)
-        return @ivars[:"@#{operator}"]
+      if args.empty?
+        if @class_node.attr_readers.include?(operator)
+          return @ivars[:"@#{operator}"]
+        end
+        if @model_attributes&.column?(operator)
+          return @model_attributes.read(operator)
+        end
       end
 
       if operator.to_s.end_with?('=') && args.size == 1
         attr = operator.to_s.chomp('=').to_sym
         if @class_node.attr_writers.include?(attr)
           return @ivars[:"@#{attr}"] = args.first
+        end
+        if @model_attributes&.column?(attr)
+          return @model_attributes.write(attr, args.first)
         end
       end
 

@@ -89,19 +89,19 @@ RSpec.describe Buttress::Predicate do
     it 'checks the condition with polarity against concrete bindings' do
       predicate = described_class.new(comparison(:>, 5), true)
 
-      expect(predicate.satisfied_by?(value: 6)).to eq(true)
-      expect(predicate.satisfied_by?(value: 5)).to eq(false)
+      expect(predicate.satisfied_by?({ value: 6 })).to eq(true)
+      expect(predicate.satisfied_by?({ value: 5 })).to eq(false)
 
       negated = described_class.new(comparison(:>, 5), false)
 
-      expect(negated.satisfied_by?(value: 5)).to eq(true)
-      expect(negated.satisfied_by?(value: 6)).to eq(false)
+      expect(negated.satisfied_by?({ value: 5 })).to eq(true)
+      expect(negated.satisfied_by?({ value: 6 })).to eq(false)
     end
 
     it 'is false when the condition cannot be evaluated' do
       predicate = described_class.new(query(:even?), true)
 
-      expect(predicate.satisfied_by?(value: 'abc')).to eq(false)
+      expect(predicate.satisfied_by?({ value: 'abc' })).to eq(false)
     end
   end
 

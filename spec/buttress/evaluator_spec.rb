@@ -192,6 +192,33 @@ RSpec.describe Buttress::Evaluator do
       .to raise_error(Buttress::CannotEvaluate)
   end
 
+  it 'reads and writes schema-declared model attributes' do
+    class_node = class_node_for("class MyClass\nend")
+    store = Buttress::ModelAttributes.new(name: :string)
+    evaluator = described_class.new(
+      class_node: class_node, model_attributes: store,
+    )
+
+    expect(evaluator.call(send_node(nil, :name), {})).to eq('blah')
+    expect(store.constructor_values).to eq(name: 'blah')
+
+    evaluator.call(send_node(n(:self), :name=, str('bob')), {})
+
+    expect(evaluator.call(send_node(nil, :name), {})).to eq('bob')
+    expect(store.constructor_values).to eq(name: 'blah')
+  end
+
+  it 'raises CannotEvaluate for model attributes of unsupported types' do
+    class_node = class_node_for("class MyClass\nend")
+    store = Buttress::ModelAttributes.new(created_at: :datetime)
+    evaluator = described_class.new(
+      class_node: class_node, model_attributes: store,
+    )
+
+    expect { evaluator.call(send_node(nil, :created_at), {}) }
+      .to raise_error(Buttress::CannotEvaluate, /datetime/)
+  end
+
   it 'raises CannotEvaluate for runaway recursion' do
     class_node = class_node_for(<<~RUBY)
       class MyClass

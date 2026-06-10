@@ -5,8 +5,11 @@ module Buttress
 end
 
 require_relative "buttress/version"
+require_relative "buttress/inflector"
 require_relative "buttress/literal"
 require_relative "buttress/evaluator"
+require_relative "buttress/model_attributes"
+require_relative "buttress/schema"
 require_relative "buttress/predicate"
 require_relative "buttress/path_enumerator"
 require_relative "buttress/node/base_node"

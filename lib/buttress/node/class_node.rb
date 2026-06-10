@@ -14,10 +14,7 @@ class ClassNode < BaseNode
   end
 
   def instance_name
-    name.split('::').last
-        .gsub(/([A-Z]+)([A-Z][a-z])/, '\1_\2')
-        .gsub(/([a-z\d])([A-Z])/, '\1_\2')
-        .downcase
+    Buttress::Inflector.underscore(name)
   end
 
   def attr_readers

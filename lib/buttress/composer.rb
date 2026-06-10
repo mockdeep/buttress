@@ -9,12 +9,14 @@ module Buttress
       new.call(*args, **kwargs)
     end
 
-    def call(code, class_name, method_name, target: Target.default)
+    def call(code, class_name, method_name, target: Target.default, schema: nil)
       root_node = RootNode.new(target.parse(code))
       flow_tree = FlowTree.new(
         root_node,
         class_name: class_name,
         method_name: method_name,
+        target: target,
+        schema: schema,
       )
 
       ERB.new(TEMPLATE, trim_mode: '-').result(binding)

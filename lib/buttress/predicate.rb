@@ -59,9 +59,10 @@ module Buttress
 
     # Whether the condition actually holds (with this polarity) under
     # the given bindings. Guards against solved values for one predicate
-    # violating another predicate on the same variable.
-    def satisfied_by?(env)
-      result = Evaluator.call(node, env) ? true : false
+    # violating another predicate on the same variable. A class-aware
+    # evaluator can be supplied so attribute reads resolve.
+    def satisfied_by?(env, evaluator: Evaluator)
+      result = evaluator.call(node, env) ? true : false
       result == polarity
     rescue CannotEvaluate
       false
@@ -79,14 +80,31 @@ module Buttress
     end
 
     def detect_form
-      return :truthiness if node.type == :lvar
+      return :truthiness if reference?(node)
 
-      if node.type == :send && node.children.first&.type == :lvar
+      if node.type == :send && reference?(node.children.first)
         return :comparison if comparison?
         return :query if QUERY_STATES.key?(operator) && node.children[2].nil?
       end
 
       :unsupported
+    end
+
+    # A node that reads a named value: a local variable, or a
+    # receiverless zero-arg call (a model attribute or method).
+    def reference?(target)
+      !reference_name(target).nil?
+    end
+
+    def reference_name(target)
+      return nil unless target.is_a?(Parser::AST::Node)
+
+      case target.type
+      when :lvar then target.children.last
+      when :send
+        receiver, message, *args = target.children
+        message if receiver.nil? && args.empty?
+      end
     end
 
     def comparison?
@@ -133,7 +151,7 @@ module Buttress
     end
 
     def name
-      node.type == :lvar ? node.children.last : node.children.first.children.last
+      reference_name(node) || reference_name(node.children.first)
     end
 
     def operator

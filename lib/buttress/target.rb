@@ -67,6 +67,15 @@ module Buttress
       legacy_rspec? ? "pending '#{message}'" : "skip '#{message}'"
     end
 
+    # Keyword-style hash syntax only exists from 1.9 on.
+    def hash_pair(key, rendered_value)
+      if version == '1.8'
+        ":#{key} => #{rendered_value}"
+      else
+        "#{key}: #{rendered_value}"
+      end
+    end
+
     private
 
     def legacy_rspec?

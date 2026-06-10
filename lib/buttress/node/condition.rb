@@ -6,11 +6,12 @@ class Condition
 
   delegate [:return_value, :return_name] => :return_expression
 
-  attr_accessor :method_node, :path
+  attr_accessor :method_node, :path, :schema
 
-  def initialize(method_node, path)
+  def initialize(method_node, path, schema: nil)
     self.method_node = method_node
     self.path = path
+    self.schema = schema
   end
 
   def description
@@ -38,9 +39,21 @@ class Condition
     )
   end
 
-  # Argument values for instantiating the class under test.
+  # Whether the class under test is a database-backed model.
+  def model?
+    !columns.nil?
+  end
+
+  # Positional argument values for instantiating a plain class.
   def constructor_values
     @constructor_values ||= constructor_params.map(&:value)
+  end
+
+  # Attribute values for instantiating a model. Only meaningful after
+  # evaluation has run (skip_reason forces it), since evaluation is what
+  # discovers which attributes the test must set.
+  def constructor_attributes
+    attribute_store.constructor_values
   end
 
   # Why this path's test must be skipped, or nil when a concrete
@@ -59,19 +72,18 @@ class Condition
       return "Buttress cannot solve: #{unsolved.map(&:source).join(', ')}"
     end
 
-    # A predicate on a computed local can't be steered through the
-    # method's arguments, and pretending otherwise would assert the
-    # wrong branch.
-    arg_names = method_node.args.map(&:name)
+    # A predicate on something that is neither an argument nor a model
+    # attribute can't be steered from the outside, and pretending
+    # otherwise would assert the wrong branch.
     foreign = path.predicates.reject do |predicate|
-      arg_names.include?(predicate.variable_name)
+      controllable_names.include?(predicate.variable_name)
     end
     if foreign.any?
       return "Buttress cannot control: #{foreign.map(&:source).join(', ')}"
     end
 
     unsatisfied = path.predicates.reject do |predicate|
-      predicate.satisfied_by?(bindings)
+      predicate.satisfied_by?(bindings, evaluator: evaluator)
     end
     if unsatisfied.any?
       return "Buttress cannot satisfy: #{unsatisfied.map(&:source).join(', ')}"
@@ -83,12 +95,25 @@ class Condition
     "Buttress cannot yet evaluate: #{error.message}"
   end
 
+  def arg_names
+    @arg_names ||= method_node.args.map(&:name)
+  end
+
+  def controllable_names
+    arg_names + (columns ? columns.keys : [])
+  end
+
   # Argument values for this path: defaults, overridden by whatever the
-  # path's predicates require.
+  # path's predicates require of the method's arguments.
   def bindings
-    @bindings ||= method_node.args
-      .to_h { |arg| [arg.name, arg.value] }
-      .merge(*path.predicates.map(&:bindings))
+    @bindings ||= begin
+      defaults = method_node.args.to_h { |arg| [arg.name, arg.value] }
+      constraints = path.predicates
+        .select(&:solvable?)
+        .select { |predicate| defaults.key?(predicate.variable_name) }
+        .map(&:bindings)
+      defaults.merge(*constraints)
+    end
   end
 
   # The environment at the end of the path: argument values plus the
@@ -103,18 +128,40 @@ class Condition
     method_node.parent_node
   end
 
+  def columns
+    return @columns if defined?(@columns)
+
+    @columns = schema&.columns_for(class_node.name)
+  end
+
+  # The model's attribute values for this path, seeded with whatever the
+  # path's predicates require. Evaluation adds defaults for attributes
+  # it reads along the way.
+  def attribute_store
+    @attribute_store ||=
+      Buttress::ModelAttributes.new(columns || {}).tap do |store|
+        path.predicates.select(&:solvable?).each do |predicate|
+          next unless columns&.key?(predicate.variable_name)
+
+          predicate.bindings.each { |name, value| store.constrain(name, value) }
+        end
+      end
+  end
+
   def constructor_params
     init = class_node.lookup_method(:initialize)
     init ? init.args : []
   end
 
   # A class-aware evaluator with instance state populated by
-  # interpreting initialize.
+  # interpreting initialize (or backed by model attributes).
   def evaluator
-    @evaluator ||=
-      Buttress::Evaluator.new(class_node: class_node).tap do |evaluator|
-        evaluator.run_initialize(constructor_values)
-      end
+    @evaluator ||= Buttress::Evaluator.new(
+      class_node: class_node,
+      model_attributes: model? ? attribute_store : nil,
+    ).tap do |evaluator|
+      evaluator.run_initialize(constructor_values) unless model?
+    end
   end
 
   def nil_node

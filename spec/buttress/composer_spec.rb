@@ -921,6 +921,142 @@ RSpec.describe Buttress::Composer, '#call' do
     expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
   end
 
+  def user_schema
+    Buttress::Schema.parse(<<~RUBY)
+      ActiveRecord::Schema.define(version: 1) do
+        create_table "users" do |t|
+          t.string "name"
+          t.integer "age"
+          t.boolean "admin"
+        end
+      end
+    RUBY
+  end
+
+  it 'generates model tests with schema-backed attributes' do
+    code = <<~RUBY
+      class User < ApplicationRecord
+        def call_me
+          if admin
+            'administrator'
+          else
+            name
+          end
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe User, '#call_me' do
+        it 'returns "administrator" when admin is true' do
+          user = User.new(admin: true)
+
+          expect(user.call_me).to eq('administrator')
+        end
+
+        it 'returns name when admin is false' do
+          user = User.new(admin: false, name: 'blah')
+
+          expect(user.call_me).to eq('blah')
+        end
+      end
+    RUBY
+
+    result = described_class.call(
+      code, 'User', 'call_me', schema: user_schema,
+    )
+    expect(result).to eq(expected_tests)
+  end
+
+  it 'solves comparison predicates on model attributes' do
+    code = <<~RUBY
+      class User < ApplicationRecord
+        def call_me
+          return 'minor' if age < 18
+          'adult'
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe User, '#call_me' do
+        it 'returns "minor" when age < 18' do
+          user = User.new(age: 17)
+
+          expect(user.call_me).to eq('minor')
+        end
+
+        it 'returns "adult" when age >= 18' do
+          user = User.new(age: 18)
+
+          expect(user.call_me).to eq('adult')
+        end
+      end
+    RUBY
+
+    result = described_class.call(
+      code, 'User', 'call_me', schema: user_schema,
+    )
+    expect(result).to eq(expected_tests)
+  end
+
+  it 'renders model constructors with hash rockets for a 1.8 target' do
+    code = <<~RUBY
+      class User < ActiveRecord::Base
+        def call_me
+          return 'minor' if age < 18
+          'adult'
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      describe User, '#call_me' do
+        it 'returns "minor" when age < 18' do
+          user = User.new(:age => 17)
+
+          user.call_me.should == 'minor'
+        end
+
+        it 'returns "adult" when age >= 18' do
+          user = User.new(:age => 18)
+
+          user.call_me.should == 'adult'
+        end
+      end
+    RUBY
+
+    result = described_class.call(
+      code, 'User', 'call_me',
+      target: Buttress::Target.new('1.8'), schema: user_schema,
+    )
+    expect(result).to eq(expected_tests)
+  end
+
+  it 'skips model paths reading attributes of unsupported types' do
+    code = <<~RUBY
+      class User < ApplicationRecord
+        def call_me
+          created_at
+        end
+      end
+    RUBY
+
+    schema = Buttress::Schema.parse(<<~RUBY)
+      ActiveRecord::Schema.define(version: 1) do
+        create_table "users" do |t|
+          t.datetime "created_at"
+        end
+      end
+    RUBY
+
+    result = described_class.call(code, 'User', 'call_me', schema: schema)
+
+    expect(result).to include(
+      "skip 'Buttress cannot yet evaluate: no default for datetime attribute created_at'",
+    )
+  end
+
   it 'returns a test per branch for an unless guard' do
     code = <<~RUBY
       class MyClass
