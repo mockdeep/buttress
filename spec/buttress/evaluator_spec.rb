@@ -138,6 +138,60 @@ RSpec.describe Buttress::Evaluator do
     expect(evaluator.call(send_node(nil, :shout), {})).to eq('BOB')
   end
 
+  it 'reads attributes declared with attr_reader' do
+    class_node = class_node_for(<<~RUBY)
+      class MyClass
+        attr_reader :name
+
+        def initialize(name)
+          @name = name
+        end
+      end
+    RUBY
+    evaluator = described_class.new(class_node: class_node)
+    evaluator.run_initialize(['bob'])
+
+    expect(evaluator.call(send_node(nil, :name), {})).to eq('bob')
+  end
+
+  it 'writes attributes declared with attr_accessor' do
+    class_node = class_node_for(<<~RUBY)
+      class MyClass
+        attr_accessor :name
+      end
+    RUBY
+    evaluator = described_class.new(class_node: class_node)
+    writer = send_node(n(:self), :name=, str('bob'))
+
+    expect(evaluator.call(writer, {})).to eq('bob')
+    expect(evaluator.call(send_node(nil, :name), {})).to eq('bob')
+  end
+
+  it 'supports the legacy attr macro with a writable flag' do
+    class_node = class_node_for(<<~RUBY)
+      class MyClass
+        attr :name, true
+      end
+    RUBY
+    evaluator = described_class.new(class_node: class_node)
+
+    evaluator.call(send_node(n(:self), :name=, str('bob')), {})
+
+    expect(evaluator.call(send_node(nil, :name), {})).to eq('bob')
+  end
+
+  it 'does not write attributes that only declare a reader' do
+    class_node = class_node_for(<<~RUBY)
+      class MyClass
+        attr_reader :name
+      end
+    RUBY
+    evaluator = described_class.new(class_node: class_node)
+
+    expect { evaluator.call(send_node(n(:self), :name=, str('bob')), {}) }
+      .to raise_error(Buttress::CannotEvaluate)
+  end
+
   it 'raises CannotEvaluate for runaway recursion' do
     class_node = class_node_for(<<~RUBY)
       class MyClass

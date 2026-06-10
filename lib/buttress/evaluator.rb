@@ -125,9 +125,28 @@ module Buttress
 
     def invoke_sibling(node, operator, args)
       method = @class_node&.lookup_method(operator)
-      raise CannotEvaluate, source(node) unless method
+      return invoke(method, args) if method
 
-      invoke(method, args)
+      attr_access(node, operator, args)
+    end
+
+    # Falls back to attr_reader/attr_writer-declared accessors, which
+    # have no def to interpret.
+    def attr_access(node, operator, args)
+      raise CannotEvaluate, source(node) unless @class_node
+
+      if args.empty? && @class_node.attr_readers.include?(operator)
+        return @ivars[:"@#{operator}"]
+      end
+
+      if operator.to_s.end_with?('=') && args.size == 1
+        attr = operator.to_s.chomp('=').to_sym
+        if @class_node.attr_writers.include?(attr)
+          return @ivars[:"@#{attr}"] = args.first
+        end
+      end
+
+      raise CannotEvaluate, source(node)
     end
 
     def invoke(method, args)

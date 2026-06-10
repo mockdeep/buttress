@@ -20,7 +20,47 @@ class ClassNode < BaseNode
         .downcase
   end
 
+  def attr_readers
+    attr_names(:reader)
+  end
+
+  def attr_writers
+    attr_names(:writer)
+  end
+
   private
+
+  # Attribute names declared by the attr-family macros in the class
+  # body. The legacy `attr :name, true` form (a 1.8-ism) declares a
+  # writer via its boolean flag.
+  def attr_names(role)
+    body_statements.flat_map do |stmt|
+      next [] unless stmt.is_a?(Parser::AST::Node) && stmt.type == :send
+
+      receiver, macro, *args = stmt.children
+      next [] unless receiver.nil?
+
+      roles =
+        case macro
+        when :attr_reader then [:reader]
+        when :attr_writer then [:writer]
+        when :attr_accessor then %i[reader writer]
+        when :attr
+          args.any? { |arg| arg.type == :true } ? %i[reader writer] : [:reader]
+        else []
+        end
+      next [] unless roles.include?(role)
+
+      args.select { |arg| arg.type == :sym }.map { |arg| arg.children.last }
+    end
+  end
+
+  def body_statements
+    body = children[2]
+    return [] if body.nil?
+
+    body.type == :begin ? body.children : [body]
+  end
 
   def find_method_node(node, method_name)
     return nil unless node.is_a?(Parser::AST::Node)

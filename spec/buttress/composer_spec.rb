@@ -868,6 +868,59 @@ RSpec.describe Buttress::Composer, '#call' do
     expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
   end
 
+  it 'evaluates attr_reader accessors' do
+    code = <<~'RUBY'
+      class MyClass
+        attr_reader :name
+
+        def initialize(name)
+          @name = name
+        end
+
+        def call_me
+          "Hi, #{name}!"
+        end
+      end
+    RUBY
+
+    expected_tests = <<~'RUBY'
+      RSpec.describe MyClass, '#call_me' do
+        it 'returns "Hi, #{name}!"' do
+          my_class = MyClass.new('blah1')
+
+          expect(my_class.call_me).to eq('Hi, blah1!')
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
+  end
+
+  it 'evaluates attr_accessor writes through self' do
+    code = <<~RUBY
+      class MyClass
+        attr_accessor :name
+
+        def call_me(value)
+          self.name = value.upcase
+          name
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe MyClass, '#call_me' do
+        it 'returns name' do
+          my_class = MyClass.new
+
+          expect(my_class.call_me('blah1')).to eq('BLAH1')
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
+  end
+
   it 'returns a test per branch for an unless guard' do
     code = <<~RUBY
       class MyClass
