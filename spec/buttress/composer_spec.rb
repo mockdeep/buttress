@@ -335,6 +335,154 @@ RSpec.describe Buttress::Composer, '#call' do
     expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
   end
 
+  it 'solves comparison predicates with boundary values' do
+    code = <<~RUBY
+      class MyClass
+        def call_me(value)
+          if value > 5
+            'big'
+          else
+            'small'
+          end
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe MyClass, '#call_me' do
+        it 'returns "big" when value > 5' do
+          my_class = MyClass.new
+
+          expect(my_class.call_me(6)).to eq('big')
+        end
+
+        it 'returns "small" when value <= 5' do
+          my_class = MyClass.new
+
+          expect(my_class.call_me(5)).to eq('small')
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
+  end
+
+  it 'solves string equality predicates' do
+    code = <<~RUBY
+      class MyClass
+        def call_me(name)
+          return 'admin' if name == 'admin'
+          'guest'
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe MyClass, '#call_me' do
+        it 'returns "admin" when name == "admin"' do
+          my_class = MyClass.new
+
+          expect(my_class.call_me('admin')).to eq('admin')
+        end
+
+        it 'returns "guest" when name != "admin"' do
+          my_class = MyClass.new
+
+          expect(my_class.call_me('not admin')).to eq('guest')
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
+  end
+
+  it 'solves empty? predicates' do
+    code = <<~RUBY
+      class MyClass
+        def call_me(value)
+          return 'nothing' if value.empty?
+          'something'
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe MyClass, '#call_me' do
+        it 'returns "nothing" when value is empty' do
+          my_class = MyClass.new
+
+          expect(my_class.call_me('')).to eq('nothing')
+        end
+
+        it 'returns "something" when value is not empty' do
+          my_class = MyClass.new
+
+          expect(my_class.call_me('blah1')).to eq('something')
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
+  end
+
+  it 'solves nil? predicates' do
+    code = <<~RUBY
+      class MyClass
+        def call_me(value)
+          return 'missing' if value.nil?
+          'present'
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe MyClass, '#call_me' do
+        it 'returns "missing" when value is nil' do
+          my_class = MyClass.new
+
+          expect(my_class.call_me(nil)).to eq('missing')
+        end
+
+        it 'returns "present" when value is not nil' do
+          my_class = MyClass.new
+
+          expect(my_class.call_me('blah1')).to eq('present')
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
+  end
+
+  it 'threads solved values through to computed return values' do
+    code = <<~RUBY
+      class MyClass
+        def call_me(value)
+          return 0 if value <= 5
+          value * 2
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe MyClass, '#call_me' do
+        it 'returns 0 when value <= 5' do
+          my_class = MyClass.new
+
+          expect(my_class.call_me(5)).to eq(0)
+        end
+
+        it 'returns value * 2 when value > 5' do
+          my_class = MyClass.new
+
+          expect(my_class.call_me(6)).to eq(12)
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
+  end
+
   it 'returns a test per branch for an unless guard' do
     code = <<~RUBY
       class MyClass
