@@ -591,6 +591,231 @@ RSpec.describe Buttress::Composer, '#call' do
     expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
   end
 
+  it 'evaluates string interpolation in return values' do
+    code = <<~'RUBY'
+      class MyClass
+        def call_me(name)
+          "Hello, #{name}!"
+        end
+      end
+    RUBY
+
+    expected_tests = <<~'RUBY'
+      RSpec.describe MyClass, '#call_me' do
+        it 'returns "Hello, #{name}!"' do
+          my_class = MyClass.new
+
+          expect(my_class.call_me('blah1')).to eq('Hello, blah1!')
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
+  end
+
+  it 'threads local assignments into the return value' do
+    code = <<~RUBY
+      class MyClass
+        def call_me(value)
+          doubled = value * 2
+          doubled.upcase
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe MyClass, '#call_me' do
+        it 'returns doubled.upcase' do
+          my_class = MyClass.new
+
+          expect(my_class.call_me('blah1')).to eq('BLAH1BLAH1')
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
+  end
+
+  it 'splits && conditions by short-circuit semantics' do
+    code = <<~RUBY
+      class MyClass
+        def call_me(first, second)
+          if first && second
+            'both'
+          else
+            'not both'
+          end
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe MyClass, '#call_me' do
+        it 'returns "both" when first is true and second is true' do
+          my_class = MyClass.new
+
+          expect(my_class.call_me(true, true)).to eq('both')
+        end
+
+        it 'returns "not both" when first is true and second is false' do
+          my_class = MyClass.new
+
+          expect(my_class.call_me(true, false)).to eq('not both')
+        end
+
+        it 'returns "not both" when first is false' do
+          my_class = MyClass.new
+
+          expect(my_class.call_me(false, 'blah2')).to eq('not both')
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
+  end
+
+  it 'splits || conditions by short-circuit semantics' do
+    code = <<~RUBY
+      class MyClass
+        def call_me(first, second)
+          if first || second
+            'either'
+          else
+            'neither'
+          end
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe MyClass, '#call_me' do
+        it 'returns "either" when first is true' do
+          my_class = MyClass.new
+
+          expect(my_class.call_me(true, 'blah2')).to eq('either')
+        end
+
+        it 'returns "either" when first is false and second is true' do
+          my_class = MyClass.new
+
+          expect(my_class.call_me(false, true)).to eq('either')
+        end
+
+        it 'returns "neither" when first is false and second is false' do
+          my_class = MyClass.new
+
+          expect(my_class.call_me(false, false)).to eq('neither')
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
+  end
+
+  it 'desugars case/when into equality predicates' do
+    code = <<~RUBY
+      class MyClass
+        def call_me(status)
+          case status
+          when 'active'
+            'running'
+          when 'paused'
+            'waiting'
+          else
+            'unknown'
+          end
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe MyClass, '#call_me' do
+        it 'returns "running" when status == "active"' do
+          my_class = MyClass.new
+
+          expect(my_class.call_me('active')).to eq('running')
+        end
+
+        it 'returns "waiting" when status != "active" and status == "paused"' do
+          my_class = MyClass.new
+
+          expect(my_class.call_me('paused')).to eq('waiting')
+        end
+
+        it 'returns "unknown" when status != "active" and status != "paused"' do
+          my_class = MyClass.new
+
+          expect(my_class.call_me('not paused')).to eq('unknown')
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
+  end
+
+  it 'skips paths whose branch depends on a computed local' do
+    code = <<~RUBY
+      class MyClass
+        def call_me(value)
+          half = value.length / 2
+          if half > 2
+            'long'
+          else
+            'short'
+          end
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe MyClass, '#call_me' do
+        it 'returns "long" when half > 2' do
+          skip 'Buttress cannot control: half > 2'
+
+          my_class = MyClass.new
+
+          my_class.call_me('blah1')
+        end
+
+        it 'returns "short" when half <= 2' do
+          skip 'Buttress cannot control: half > 2'
+
+          my_class = MyClass.new
+
+          my_class.call_me('blah1')
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
+  end
+
+  it 'skips paths whose combined predicates cannot be satisfied' do
+    code = <<~RUBY
+      class MyClass
+        def call_me(value)
+          if value > 10
+            if value < 7
+              'impossible'
+            else
+              'big'
+            end
+          else
+            'small'
+          end
+        end
+      end
+    RUBY
+
+    result = described_class.call(code, 'MyClass', 'call_me')
+
+    expect(result).to include(
+      "it 'returns \"impossible\" when value > 10 and value < 7' do\n" \
+      "    skip 'Buttress cannot satisfy: value > 10'",
+    )
+    expect(result).to include("expect(my_class.call_me(10)).to eq('small')")
+  end
+
   it 'returns a test per branch for an unless guard' do
     code = <<~RUBY
       class MyClass

@@ -57,6 +57,34 @@ RSpec.describe Buttress::Evaluator do
     expect(call(node)).to eq(10)
   end
 
+  it 'evaluates string interpolation' do
+    node = n(:dstr, str('Dear '), n(:begin, lvar(:name)))
+
+    expect(call(node, name: 'Bob')).to eq('Dear Bob')
+  end
+
+  it 'evaluates local assignment, mutating the environment' do
+    env = { value: 3 }
+    node = n(:lvasgn, :doubled, send_node(lvar(:value), :*, int(2)))
+
+    expect(call(node, env)).to eq(6)
+    expect(env[:doubled]).to eq(6)
+  end
+
+  it 'evaluates && and || with short-circuit semantics' do
+    expect(call(n(:and, n(:true), n(:false)))).to eq(false)
+    expect(call(n(:or, n(:false), str('fallback')))).to eq('fallback')
+    expect { call(n(:or, n(:true), n(:ivar, :@unreachable))) }
+      .not_to raise_error
+  end
+
+  it 'evaluates if expressions concretely' do
+    node = n(:if, n(:true), str('yes'), str('no'))
+
+    expect(call(node)).to eq('yes')
+    expect(call(n(:if, n(:false), str('yes'), nil))).to eq(nil)
+  end
+
   it 'raises CannotEvaluate for non-whitelisted methods' do
     expect { call(send_node(str('abc'), :object_id)) }
       .to raise_error(Buttress::CannotEvaluate, /String#object_id/)

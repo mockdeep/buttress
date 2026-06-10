@@ -51,6 +51,22 @@ module Buttress
       form != :unsupported
     end
 
+    # The variable the predicate constrains. Only meaningful for
+    # solvable forms.
+    def variable_name
+      name
+    end
+
+    # Whether the condition actually holds (with this polarity) under
+    # the given bindings. Guards against solved values for one predicate
+    # violating another predicate on the same variable.
+    def satisfied_by?(env)
+      result = Evaluator.call(node, env) ? true : false
+      result == polarity
+    rescue CannotEvaluate
+      false
+    end
+
     def source
       cleaned = node.location&.expression&.source&.gsub("'", '"')
       cleaned || "(#{node.type})"

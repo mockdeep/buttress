@@ -11,34 +11,35 @@ module Buttress
   class Evaluator
     PURE_METHODS = {
       String => %i[
-        + * == != < > <= >= <=> length size empty? upcase downcase
+        + * == != < > <= >= <=> nil? length size empty? upcase downcase
         capitalize swapcase reverse strip lstrip rstrip chomp chop squeeze
         include? start_with? end_with? index rindex sub gsub tr delete
         count split chars succ next center ljust rjust slice
         to_s to_i to_f to_sym inspect
       ],
       Integer => %i[
-        + - * / % ** == != < > <= >= <=> abs ceil floor round truncate
+        + - * / % ** == != < > <= >= <=> nil? abs ceil floor round truncate
         succ next pred divmod gcd lcm digits
         zero? positive? negative? even? odd?
         to_s to_i to_f to_r inspect
       ],
       Float => %i[
-        + - * / % ** == != < > <= >= <=> abs ceil floor round truncate
+        + - * / % ** == != < > <= >= <=> nil? abs ceil floor round truncate
         zero? positive? negative? nan? infinite? finite?
         to_s to_i to_f to_r inspect
       ],
-      Symbol => %i[== != <=> length size upcase downcase capitalize succ
-                   next to_s to_sym inspect],
+      Symbol => %i[== != <=> nil? length size upcase downcase capitalize
+                   succ next to_s to_sym inspect],
       NilClass => %i[== != nil? to_s to_a to_i inspect],
-      TrueClass => %i[== != & | ^ to_s inspect],
-      FalseClass => %i[== != & | ^ to_s inspect],
+      TrueClass => %i[== != & | ^ nil? to_s inspect],
+      FalseClass => %i[== != & | ^ nil? to_s inspect],
       Array => %i[
-        + - * & | == != length size empty? first last reverse sort min max
+        + - * & | == != nil? length size empty? first last reverse sort
+        min max
         sum uniq compact flatten include? index join slice take drop
         to_a inspect
       ],
-      Hash => %i[== != length size empty? keys values invert merge
+      Hash => %i[== != nil? length size empty? keys values invert merge
                  include? key? has_key? has_value? value? to_a inspect],
     }.freeze
 
@@ -53,9 +54,23 @@ module Buttress
       when :nil then nil
       when :int, :float, :str, :sym then node.children.last
       when :lvar then fetch(node, env)
+      when :lvasgn
+        env[node.children.first] = call(node.children.last, env)
       when :send then evaluate_send(node, env)
       when :begin
         node.children.map { |child| call(child, env) }.last
+      when :dstr
+        node.children.map { |part| call(part, env).to_s }.join
+      when :and
+        left, right = node.children
+        call(left, env) && call(right, env)
+      when :or
+        left, right = node.children
+        call(left, env) || call(right, env)
+      when :if
+        condition, then_branch, else_branch = node.children
+        branch = call(condition, env) ? then_branch : else_branch
+        branch && call(branch, env)
       else
         raise CannotEvaluate, source(node)
       end

@@ -33,7 +33,7 @@ class Condition
     @return_expression ||= ReturnExpression.new(
       path.return_node || nil_node,
       parent_node: method_node,
-      bindings: bindings,
+      bindings: env,
     )
   end
 
@@ -53,6 +53,24 @@ class Condition
       return "Buttress cannot solve: #{unsolved.map(&:source).join(', ')}"
     end
 
+    # A predicate on a computed local can't be steered through the
+    # method's arguments, and pretending otherwise would assert the
+    # wrong branch.
+    arg_names = method_node.args.map(&:name)
+    foreign = path.predicates.reject do |predicate|
+      arg_names.include?(predicate.variable_name)
+    end
+    if foreign.any?
+      return "Buttress cannot control: #{foreign.map(&:source).join(', ')}"
+    end
+
+    unsatisfied = path.predicates.reject do |predicate|
+      predicate.satisfied_by?(bindings)
+    end
+    if unsatisfied.any?
+      return "Buttress cannot satisfy: #{unsatisfied.map(&:source).join(', ')}"
+    end
+
     return_value
     nil
   rescue Buttress::CannotEvaluate => error
@@ -65,6 +83,14 @@ class Condition
     @bindings ||= method_node.args
       .to_h { |arg| [arg.name, arg.value] }
       .merge(*path.predicates.map(&:bindings))
+  end
+
+  # The environment at the end of the path: argument values plus the
+  # effects of the statements executed along the way.
+  def env
+    @env ||= path.statements.each_with_object(bindings.dup) do |stmt, env|
+      Buttress::Evaluator.call(stmt, env)
+    end
   end
 
   def nil_node
