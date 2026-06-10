@@ -2,4 +2,12 @@
 
 require_relative "../lib/buttress"
 
-Buttress::Runner.call(*ARGV)
+if ARGV.size < 2
+  abort "usage: buttress FILE 'ClassName#method' [TARGET_RUBY_VERSION]"
+end
+
+begin
+  puts "Wrote #{Buttress::Runner.call(*ARGV)}"
+rescue Buttress::Error => error
+  abort error.message
+end
