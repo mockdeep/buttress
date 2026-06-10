@@ -39,9 +39,20 @@ module Buttress
                    "(supported: #{PARSERS.keys.join(', ')})"
     end
 
+    def parse(code)
+      parser.parse(Parser::Source::Buffer.new('(buttress)', source: code))
+    end
+
+    private
+
+    # A parser that raises on syntax errors without also printing
+    # diagnostics to stderr, unlike the Parser::Base.parse shortcut.
     def parser
       require "parser/ruby#{version.delete('.')}"
-      Object.const_get(PARSERS.fetch(version))
+      parser = Object.const_get(PARSERS.fetch(version)).new
+      parser.diagnostics.all_errors_are_fatal = true
+      parser.diagnostics.ignore_warnings = true
+      parser
     end
   end
 end

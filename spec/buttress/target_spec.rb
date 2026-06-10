@@ -4,15 +4,15 @@ RSpec.describe Buttress::Target do
   RUBY_18_ONLY_CODE = "if true : 'a' end".freeze
 
   it 'parses 1.8-only syntax with the 1.8 target' do
-    parser = described_class.new('1.8').parser
+    target = described_class.new('1.8')
 
-    expect(parser.parse(RUBY_18_ONLY_CODE)).to be_a(Parser::AST::Node)
+    expect(target.parse(RUBY_18_ONLY_CODE)).to be_a(Parser::AST::Node)
   end
 
   it 'rejects 1.8-only syntax with the default target' do
-    parser = described_class.default.parser
+    target = described_class.default
 
-    expect { parser.parse(RUBY_18_ONLY_CODE) }
+    expect { target.parse(RUBY_18_ONLY_CODE) }
       .to raise_error(Parser::SyntaxError)
   end
 

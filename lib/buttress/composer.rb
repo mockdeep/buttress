@@ -10,7 +10,7 @@ module Buttress
     end
 
     def call(code, class_name, method_name, target: Target.default)
-      root_node = RootNode.new(target.parser.parse(code))
+      root_node = RootNode.new(target.parse(code))
       flow_tree = FlowTree.new(
         root_node,
         class_name: class_name,
