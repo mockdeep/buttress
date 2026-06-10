@@ -1,0 +1,28 @@
+RSpec.describe Buttress::Target do
+  # `if cond : body end` is valid only in Ruby 1.8; the colon-as-then
+  # syntax was removed in 1.9.
+  RUBY_18_ONLY_CODE = "if true : 'a' end".freeze
+
+  it 'parses 1.8-only syntax with the 1.8 target' do
+    parser = described_class.new('1.8').parser
+
+    expect(parser.parse(RUBY_18_ONLY_CODE)).to be_a(Parser::AST::Node)
+  end
+
+  it 'rejects 1.8-only syntax with the default target' do
+    parser = described_class.default.parser
+
+    expect { parser.parse(RUBY_18_ONLY_CODE) }
+      .to raise_error(Parser::SyntaxError)
+  end
+
+  it 'raises a Buttress::Error for an unsupported version' do
+    expect { described_class.new('0.9') }
+      .to raise_error(Buttress::Error, /unsupported target Ruby version/)
+  end
+
+  it 'defaults to the newest supported version when given nil' do
+    expect(described_class.new(nil).version)
+      .to eq(described_class::DEFAULT_VERSION)
+  end
+end
