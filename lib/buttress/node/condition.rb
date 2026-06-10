@@ -161,11 +161,17 @@ class Condition
   end
 
   # The environment at the end of the path: argument values plus the
-  # effects of the statements executed along the way.
+  # effects of the statements executed along the way. Deep-duped so
+  # evaluation can mutate values (list << x) without corrupting the
+  # bindings rendered into the generated call.
   def env
-    @env ||= path.statements.each_with_object(bindings.dup) do |stmt, env|
+    @env ||= path.statements.each_with_object(deep_dup(bindings)) do |stmt, env|
       evaluator.call(stmt, env)
     end
+  end
+
+  def deep_dup(value)
+    Marshal.load(Marshal.dump(value))
   end
 
   def class_node
@@ -205,7 +211,9 @@ class Condition
       model_attributes: model? ? attribute_store : nil,
     ).tap do |evaluator|
       unless model?
-        evaluator.run_initialize(constructor_values, constructor_keywords)
+        evaluator.run_initialize(
+          deep_dup(constructor_values), deep_dup(constructor_keywords)
+        )
       end
     end
   end

@@ -36,15 +36,42 @@ module Buttress
       ClassReference => %i[== != nil?],
       # String#[] is deliberately absent: its semantics changed between
       # 1.8 and 1.9, so it needs version-aware handling first.
+      # Mutators like Array#<< are safe here: they only ever touch
+      # values the evaluator built itself (Condition deep-dups bindings
+      # into the evaluation env).
       Array => %i[
-        + - * & | == != nil? [] length size empty? first last reverse sort
-        min max
+        + - * & | == != nil? [] << push concat length size empty? first
+        last reverse sort min max
         sum uniq compact flatten include? index join slice take drop
         to_a inspect
       ],
-      Hash => %i[== != nil? [] fetch length size empty? keys values invert
-                 merge include? key? has_key? has_value? value? to_a
-                 inspect],
+      Hash => %i[== != nil? [] []= store delete fetch length size empty?
+                 keys values invert merge include? key? has_key?
+                 has_value? value? to_a inspect],
+      Range => %i[== != nil? to_a min max first last size count sum
+                  include? cover?],
+    }.freeze
+
+    # Methods allowed to receive an interpreted block. All confine the
+    # block's effects to the receiver and the block body itself.
+    BLOCK_METHODS = {
+      Array => %i[
+        map collect each select filter reject flat_map each_with_object
+        detect find any? all? none? one? count sum min_by max_by sort_by
+        group_by partition take_while drop_while each_with_index
+        find_index reduce inject
+      ],
+      Hash => %i[
+        map each each_pair select filter reject any? all? none? count
+        sum min_by max_by sort_by group_by partition detect find
+        each_with_object transform_values transform_keys
+      ],
+      Range => %i[
+        map collect each select filter reject flat_map each_with_object
+        detect find any? all? none? count sum min_by max_by sort_by
+        group_by partition reduce inject
+      ],
+      Integer => %i[times upto downto],
     }.freeze
 
     # Interpreted sibling calls deeper than this are assumed to be
@@ -114,6 +141,22 @@ module Buttress
         condition, then_branch, else_branch = node.children
         branch = call(condition, env) ? then_branch : else_branch
         branch && call(branch, env)
+      when :irange, :erange
+        low, high = node.children.map { |child| child && call(child, env) }
+        Range.new(low, high, node.type == :erange)
+      when :block
+        _send, params, body = node.children
+        evaluate_block(node, block_param_names(node, params), body, env)
+      when :numblock
+        _send, count, body = node.children
+        names = (1..count).map { |index| :"_#{index}" }
+        evaluate_block(node, names, body, env)
+      when :next
+        value = node.children.first && call(node.children.first, env)
+        throw :block_next, value
+      when :break
+        value = node.children.first && call(node.children.first, env)
+        throw :block_break, value
       else
         raise CannotEvaluate, source(node)
       end
@@ -164,6 +207,9 @@ module Buttress
 
     def evaluate_send(node, env)
       receiver_node, operator, *arg_nodes = node.children
+      return evaluate_block_pass(node, env) if
+        arg_nodes.last&.type == :block_pass
+
       args = arg_nodes.map { |arg_node| call(arg_node, env) }
 
       if receiver_node.nil? || receiver_node.type == :self
@@ -172,6 +218,81 @@ module Buttress
 
       receiver = call(receiver_node, env)
       apply(receiver, operator, args)
+    end
+
+    def evaluate_block(node, names, body, env)
+      send_node = node.children.first
+      receiver_node, operator, *arg_nodes = send_node.children
+      raise CannotEvaluate, source(node) unless receiver_node
+
+      receiver = call(receiver_node, env)
+      args = arg_nodes.map { |arg_node| call(arg_node, env) }
+
+      with_block(receiver, operator, args) do |*block_args|
+        bind_block_params(env, names, block_args)
+        catch(:block_next) { body ? call(body, env) : nil }
+      end
+    end
+
+    # The &:symbol form: receiver.map(&:upcase).
+    def evaluate_block_pass(node, env)
+      receiver_node, operator, *arg_nodes = node.children
+      sym_node = arg_nodes.pop.children.first
+      unless receiver_node && sym_node&.type == :sym
+        raise CannotEvaluate, source(node)
+      end
+
+      receiver = call(receiver_node, env)
+      args = arg_nodes.map { |arg_node| call(arg_node, env) }
+      message = sym_node.children.first
+
+      with_block(receiver, operator, args) do |*block_args|
+        apply(block_args.first, message, [])
+      end
+    end
+
+    def with_block(receiver, operator, args)
+      unless BLOCK_METHODS[receiver.class]&.include?(operator)
+        raise CannotEvaluate, "#{receiver.class}##{operator} with a block"
+      end
+
+      catch(:block_break) do
+        receiver.public_send(operator, *args) do |*block_args|
+          yield(*block_args)
+        end
+      rescue CannotEvaluate
+        raise
+      rescue StandardError => error
+        raise CannotEvaluate,
+              "#{receiver.class}##{operator} raises #{error.class}"
+      end
+    end
+
+    def block_param_names(node, params_node)
+      params_node.children.flat_map do |param|
+        case param.type
+        when :arg then [param.children.first]
+        when :procarg0
+          param.children.map do |inner|
+            raise CannotEvaluate, source(node) unless inner.type == :arg
+
+            inner.children.first
+          end
+        else
+          raise CannotEvaluate, source(node)
+        end
+      end
+    end
+
+    # Mimics proc argument semantics: a multi-param block destructures a
+    # single array argument (hash iteration yields [key, value] pairs).
+    def bind_block_params(env, names, block_args)
+      if names.size > 1 && block_args.size == 1 &&
+         block_args.first.is_a?(Array)
+        block_args = block_args.first
+      end
+
+      names.each_with_index { |name, index| env[name] = block_args[index] }
     end
 
     def invoke_sibling(node, operator, args)

@@ -89,6 +89,56 @@ RSpec.describe Buttress::Evaluator do
     RootNode.new(Buttress::Target.default.parse(code)).find_class('MyClass')
   end
 
+  def expr(code)
+    Buttress::Target.default.parse(code)
+  end
+
+  it 'evaluates blocks over arrays, ranges, and integers' do
+    expect(call(expr('[1, 2, 3].map { |x| x * 2 }'))).to eq([2, 4, 6])
+    expect(call(expr('[3, 1, 2].select { |x| x > 1 }'))).to eq([3, 2])
+    expect(call(expr('(1..4).sum { |x| x * 10 }'))).to eq(100)
+    expect(call(expr('[1, 2].map { _1 * 3 }'))).to eq([3, 6])
+  end
+
+  it 'evaluates each_with_object with contained mutation' do
+    node = expr('[1, 2].each_with_object([]) { |x, memo| memo << x * 2 }')
+
+    expect(call(node)).to eq([2, 4])
+  end
+
+  it 'destructures hash iteration into block parameters' do
+    node = expr('{ a: 1, b: 2 }.map { |key, value| "#{key}=#{value}" }')
+
+    expect(call(node)).to eq(['a=1', 'b=2'])
+  end
+
+  it 'evaluates the &:symbol block form' do
+    expect(call(expr("['a', 'b'].map(&:upcase)"))).to eq(%w[A B])
+  end
+
+  it 'honors next and break inside blocks' do
+    skip_evens = expr('[1, 2, 3].map { |x| next 0 if x == 2; x }')
+    first_big = expr('[1, 2, 3].each { |x| break x * 10 if x > 1 }')
+
+    expect(call(skip_evens)).to eq([1, 0, 3])
+    expect(call(first_big)).to eq(20)
+  end
+
+  it 'raises CannotEvaluate for blocks on non-whitelisted methods' do
+    expect { call(expr('[1].instance_exec { 2 }')) }
+      .to raise_error(Buttress::CannotEvaluate, /Array#instance_exec/)
+  end
+
+  it 'propagates CannotEvaluate from inside block bodies' do
+    expect { call(expr('[1].map { |x| helper(x) }')) }
+      .to raise_error(Buttress::CannotEvaluate, /helper/)
+  end
+
+  it 'evaluates range literals' do
+    expect(call(expr('(1..3).to_a'))).to eq([1, 2, 3])
+    expect(call(expr('(1...3).to_a'))).to eq([1, 2])
+  end
+
   it 'invokes sibling methods by interpreting their bodies' do
     class_node = class_node_for(<<~RUBY)
       class MyClass

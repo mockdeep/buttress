@@ -1353,6 +1353,50 @@ RSpec.describe Buttress::Composer, '#call' do
     expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
   end
 
+  it 'evaluates blocks in return values' do
+    code = <<~RUBY
+      class MyClass
+        def call_me
+          [3, 1, 2].select { |n| n > 1 }.sort
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe MyClass, '#call_me' do
+        it 'returns [3, 1, 2].select { |n| n > 1 }.sort' do
+          my_class = MyClass.new
+
+          expect(my_class.call_me).to eq([2, 3])
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
+  end
+
+  it 'evaluates blocks over method arguments' do
+    code = <<~RUBY
+      class MyClass
+        def call_me(name)
+          name.split.map(&:capitalize).join(' ')
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe MyClass, '#call_me' do
+        it 'returns name.split.map(&:capitalize).join(" ")' do
+          my_class = MyClass.new
+
+          expect(my_class.call_me('blah1')).to eq('Blah1')
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
+  end
+
   it 'returns a test per branch for an unless guard' do
     code = <<~RUBY
       class MyClass
