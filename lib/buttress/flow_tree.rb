@@ -71,7 +71,7 @@ module Buttress
 
     def flows
       conditions = method_node.conditions(
-        schema, sources: sources, class_name: class_name,
+        schema, sources: sources, class_name: class_name, target: target,
       )
       conditions.map { |condition| Flow.new(condition, parent: self) }
     end

@@ -2,6 +2,10 @@
 # included helpers. Shares ClassNode's body conventions; the AST just
 # has no superclass slot.
 class ModuleNode < ClassNode
+  def superclass_name
+    nil
+  end
+
   private
 
   def body_statements

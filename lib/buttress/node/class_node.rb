@@ -33,6 +33,14 @@ class ClassNode < BaseNode
     Buttress::Inflector.underscore(name)
   end
 
+  # The declared superclass's dotted path, or nil when this definition
+  # declares none (which does not prove the class has none — a reopen
+  # elsewhere may declare it; Sources records those).
+  def superclass_name
+    superclass = children[1]
+    superclass && qualified_const_name(superclass)
+  end
+
   # Names of public instance methods defined in the class body, in
   # definition order, honoring visibility modifiers. initialize is
   # never included; it's exercised through instantiation instead.

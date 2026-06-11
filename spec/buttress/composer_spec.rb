@@ -1584,6 +1584,64 @@ RSpec.describe Buttress::Composer, '#call' do
     expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
   end
 
+  it 'proves type guards false for synthesized same-class instances' do
+    code = <<~RUBY
+      class MyClass
+        attr_reader :name
+
+        def initialize(name)
+          @name = name
+        end
+
+        def call_me(other)
+          other.is_a?(String) ? name == other : other.name == name
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe MyClass, '#call_me' do
+        it 'returns name == other when other.is_a?(String)' do
+          skip 'Buttress cannot satisfy: other.is_a?(String)'
+
+          my_class = MyClass.new('blah1')
+
+          my_class.call_me(MyClass.new('blah1'))
+        end
+
+        it 'returns other.name == name when !(other.is_a?(String))' do
+          my_class = MyClass.new('blah1')
+
+          expect(my_class.call_me(MyClass.new('blah1'))).to eq(true)
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
+  end
+
+  it 'evaluates is_a?(self.class) for classes without initialize' do
+    code = <<~RUBY
+      class MyClass
+        def call_me(other)
+          other.is_a?(self.class)
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe MyClass, '#call_me' do
+        it 'returns other.is_a?(self.class)' do
+          my_class = MyClass.new
+
+          expect(my_class.call_me(MyClass.new)).to eq(true)
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
+  end
+
   it 'finds classes nested inside modules and compact names' do
     code = <<~RUBY
       module Outer

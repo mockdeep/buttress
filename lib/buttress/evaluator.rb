@@ -78,6 +78,27 @@ module Buttress
     # runaway recursion.
     MAX_DEPTH = 50
 
+    # Core constants whose identity and class ancestry are stable
+    # across every supported target version, so type checks against
+    # them can be answered from the host.
+    CORE_CONSTANTS = {
+      'String' => String, 'Integer' => Integer, 'Float' => Float,
+      'Symbol' => Symbol, 'Array' => Array, 'Hash' => Hash,
+      'Range' => Range, 'Numeric' => Numeric, 'Object' => Object,
+      'BasicObject' => BasicObject, 'NilClass' => NilClass,
+      'TrueClass' => TrueClass, 'FalseClass' => FalseClass,
+      'Regexp' => Regexp, 'Proc' => Proc, 'Struct' => Struct,
+      'Comparable' => Comparable, 'Enumerable' => Enumerable,
+      'Kernel' => Kernel,
+    }.freeze
+
+    # Methods that existed on core types in some supported target
+    # version but not on the host (the taint family and Object#=~ were
+    # removed in 3.x). Host absence proves nothing for these.
+    REMOVED_CORE_METHODS = %i[
+      taint untaint tainted? trust untrust untrusted? =~ type id
+    ].freeze
+
     def self.call(node, env)
       new.call(node, env)
     end
@@ -85,13 +106,17 @@ module Buttress
     # depth carries the interpretation depth across evaluators, so
     # mutual recursion between classes still hits MAX_DEPTH. ivars
     # seeds instance state, for dispatching onto an already-built
-    # InstanceValue.
+    # InstanceValue. class_path is the qualified name of class_node
+    # (which only knows its basename); target gates the few answers
+    # that depend on the analyzed codebase's Ruby version.
     def initialize(class_node: nil, model_attributes: nil, sources: nil,
-                   depth: 0, ivars: {})
+                   depth: 0, ivars: {}, class_path: nil, target: nil)
       @class_node = class_node
       @model_attributes = model_attributes
       @sources = sources
       @ivars = ivars
+      @class_path = class_path || class_node&.name
+      @target = target
       @constants = {}
       @modules = {}
       @classes = {}
@@ -115,9 +140,12 @@ module Buttress
     end
 
     # Entry point for a send resolved against this evaluator's class
-    # and instance state, used by instance-value dispatch.
+    # and instance state, used by instance-value dispatch. Type
+    # predicates the class doesn't define itself are answered from
+    # static class shape, when provable.
     def dispatch(operator, args, arg_nodes = [])
       value = resolve_send(operator, args, arg_nodes)
+      value = instance_type_query(operator, args) if value.equal?(MISSING)
       if value.equal?(MISSING)
         raise CannotEvaluate, "#{@class_node.name}##{operator}"
       end
@@ -266,7 +294,8 @@ module Buttress
 
       Evaluator.new(
         class_node: class_node, sources: @sources, depth: @depth,
-        ivars: instance.ivars,
+        ivars: instance.ivars, class_path: instance.class_path,
+        target: @target,
       ).dispatch(operator, args, arg_nodes)
     end
 
@@ -282,6 +311,7 @@ module Buttress
 
       evaluator = Evaluator.new(
         class_node: class_node, sources: @sources, depth: @depth,
+        class_path: reference.path, target: @target,
       )
       positional, keywords = split_keywords(method, args, arg_nodes)
       evaluator.invoke_method(method, positional, keywords)
@@ -408,6 +438,10 @@ module Buttress
 
     def resolve_send(operator, args, arg_nodes)
       return MISSING unless @class_node
+
+      # self.class — def class is not definable, so this can't shadow.
+      return ClassReference.new(@class_path) if
+        operator == :class && args.empty?
 
       method = @class_node.lookup_method(operator)
       return invoke_split(method, args, arg_nodes) if method
@@ -554,6 +588,9 @@ module Buttress
     end
 
     def apply(receiver, operator, args)
+      result = host_type_query(receiver, operator, args)
+      return result unless result.equal?(MISSING)
+
       unless PURE_METHODS[receiver.class]&.include?(operator)
         raise CannotEvaluate, "#{receiver.class}##{operator}"
       end
@@ -568,6 +605,180 @@ module Buttress
 
     def source(node)
       node.location&.expression&.source || "#{node.type} node"
+    end
+
+    # --- Type predicates, answered only when provable. ---
+
+    # On host values: class identity is version-stable, so is_a? checks
+    # against known constants answer from the host. Method existence is
+    # not version-stable, so respond_to? answers only false, only for
+    # 1.9+ targets, and never for names with a removal history.
+    def host_type_query(receiver, operator, args)
+      return MISSING if receiver.is_a?(ClassReference)
+
+      case operator
+      when :is_a?, :kind_of?, :instance_of?
+        return MISSING unless args.size == 1 &&
+                              args.first.is_a?(ClassReference)
+
+        host_is_a?(receiver, operator, args.first.path)
+      when :respond_to?
+        return MISSING unless args.size == 1 && args.first.is_a?(Symbol)
+
+        host_responds_false?(receiver, args.first)
+      else
+        MISSING
+      end
+    end
+
+    def host_is_a?(receiver, operator, path)
+      name = path.sub(/\A::/, '')
+      constant = CORE_CONSTANTS[name]
+      if constant
+        return receiver.instance_of?(constant) if operator == :instance_of?
+
+        receiver.is_a?(constant)
+      elsif resolve_class(name)
+        # Core values are never instances of project-defined classes.
+        # (Project modules could be mixed into core classes by core_ext
+        # reopens, so module references stay unanswered.)
+        false
+      else
+        MISSING
+      end
+    end
+
+    def host_responds_false?(receiver, name)
+      return MISSING unless @target&.at_least?('1.9')
+      return MISSING if REMOVED_CORE_METHODS.include?(name)
+
+      receiver.respond_to?(name) ? MISSING : false
+    end
+
+    # On interpreted instances: ancestry comes from project sources.
+    def instance_type_query(operator, args)
+      case operator
+      when :is_a?, :kind_of?, :instance_of?
+        return MISSING unless args.size == 1 &&
+                              args.first.is_a?(ClassReference)
+
+        instance_is_a?(operator, args.first.path)
+      when :respond_to?
+        return MISSING unless args.size == 1 && args.first.is_a?(Symbol)
+
+        # Absence proves nothing: unresolvable modules, superclasses,
+        # or method_missing could still answer.
+        responds_to?(args.first) ? true : MISSING
+      else
+        MISSING
+      end
+    end
+
+    def instance_is_a?(operator, path)
+      ref = path.sub(/\A::/, '')
+      if operator == :instance_of?
+        return true if name_match?(ref, @class_path)
+
+        return reference_kind(ref) == :unknown ? MISSING : false
+      end
+
+      chain, complete = ancestry_chain
+      return true if chain.any? { |name| name_match?(ref, name) }
+      return true if
+        @class_node.included_modules.any? { |name| name_match?(ref, name) }
+
+      # Falsity for a class reference needs only a complete superclass
+      # chain (modules never add class ancestry). Falsity for a module
+      # reference would need complete include knowledge — not modeled.
+      return false if reference_kind(ref) == :class && complete
+
+      MISSING
+    end
+
+    # The superclass chain as far as project sources prove it, ending
+    # with Object's host ancestry when the chain provably ends at
+    # implicit Object. The flag is false when any link is unresolvable,
+    # conflicting, or cyclic.
+    def ancestry_chain
+      @ancestry_chain ||= build_ancestry_chain
+    end
+
+    def build_ancestry_chain
+      chain = [@class_path]
+      node = @class_node
+      path = @class_path
+      seen = []
+      loop do
+        return [chain, false] if node.nil? || seen.include?(path)
+
+        seen << path
+        declared = ([node.superclass_name] + recorded_superclasses(path))
+          .compact.uniq
+        case declared.size
+        when 0
+          return [chain + %w[Object Kernel BasicObject], true]
+        when 1
+          name = declared.first
+          constant = CORE_CONSTANTS[name]
+          if constant.is_a?(Class)
+            return [chain + constant.ancestors.map(&:to_s), true]
+          end
+
+          chain << name
+          path = name
+          node = resolve_class(name)
+        else
+          return [chain, false]
+        end
+      end
+    end
+
+    def recorded_superclasses(path)
+      @sources ? @sources.superclass_names(path) : []
+    end
+
+    # A written reference matches a known name when they're identical
+    # or one is a trailing qualification of the other; bare basenames
+    # only count when the project has exactly one class by that name,
+    # since the lexical resolution is otherwise ambiguous.
+    def name_match?(ref, name)
+      return false if name.nil?
+      return true if ref == name
+      return true if name.end_with?("::#{ref}") && unambiguous?(ref)
+
+      ref.end_with?("::#{name}")
+    end
+
+    def unambiguous?(ref)
+      return true if ref.include?('::')
+
+      @sources ? @sources.unique_class_basename?(ref) : true
+    end
+
+    def reference_kind(ref)
+      constant = CORE_CONSTANTS[ref]
+      return constant.is_a?(Class) ? :class : :module if constant
+      return :unknown unless unambiguous?(ref)
+
+      return :class if resolve_class(ref)
+      return :module if resolve_module(ref)
+
+      :unknown
+    end
+
+    # Whether the resolution chain can see a definition for name,
+    # proving respond_to? true.
+    def responds_to?(name)
+      return false unless @class_node
+
+      writer = name.to_s.end_with?('=') ? name.to_s.chomp('=').to_sym : nil
+      !!(@class_node.lookup_method(name) ||
+         @class_node.attr_readers.include?(name) ||
+         @class_node.data_members.include?(name) ||
+         (writer && @class_node.attr_writers.include?(writer)) ||
+         included_module_method(name) ||
+         @model_attributes&.column?(name) ||
+         (writer && @model_attributes&.column?(writer)))
     end
   end
 end

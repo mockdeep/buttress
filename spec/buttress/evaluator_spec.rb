@@ -538,6 +538,132 @@ RSpec.describe Buttress::Evaluator do
       .to raise_error(Buttress::CannotEvaluate, /Widget#missing/)
   end
 
+  it 'answers type checks on host values from stable class identity' do
+    expect(call(expr('"hi".is_a?(String)'))).to eq(true)
+    expect(call(expr('"hi".is_a?(Integer)'))).to eq(false)
+    expect(call(expr('5.kind_of?(Numeric)'))).to eq(true)
+    expect(call(expr('"hi".instance_of?(Comparable)'))).to eq(false)
+  end
+
+  it 'answers respond_to? false on host values for modern targets' do
+    evaluator = described_class.new(target: Buttress::Target.default)
+
+    expect(evaluator.call(expr('"hi".respond_to?(:tag_name)'), {}))
+      .to eq(false)
+  end
+
+  it 'leaves host respond_to? unanswered for 1.8 targets' do
+    evaluator = described_class.new(target: Buttress::Target.new('1.8'))
+
+    expect { evaluator.call(expr('"hi".respond_to?(:tag_name)'), {}) }
+      .to raise_error(Buttress::CannotEvaluate)
+  end
+
+  it 'never answers respond_to? true from the host' do
+    evaluator = described_class.new(target: Buttress::Target.default)
+
+    expect { evaluator.call(expr('"hi".respond_to?(:upcase)'), {}) }
+      .to raise_error(Buttress::CannotEvaluate)
+  end
+
+  it 'leaves removal-history names unanswered on host values' do
+    evaluator = described_class.new(target: Buttress::Target.default)
+
+    expect { evaluator.call(expr('"hi".respond_to?(:taint)'), {}) }
+      .to raise_error(Buttress::CannotEvaluate)
+  end
+
+  it 'proves is_a? false against core classes for project instances' do
+    class_node = class_node_for(<<~RUBY)
+      class Widget
+        def initialize(name)
+          @name = name
+        end
+      end
+
+      class MyClass
+      end
+    RUBY
+    evaluator = described_class.new(class_node: class_node)
+    instance = Buttress::InstanceValue.new(class_path: 'Widget')
+    node = send_node(lvar(:other), :is_a?, expr('String'))
+
+    expect(evaluator.call(node, other: instance)).to eq(false)
+  end
+
+  it 'proves is_a? true through declared superclasses' do
+    class_node = class_node_for(<<~RUBY)
+      class Base
+      end
+
+      class Widget < Base
+      end
+
+      class MyClass
+      end
+    RUBY
+    evaluator = described_class.new(class_node: class_node)
+    instance = Buttress::InstanceValue.new(class_path: 'Widget')
+
+    expect(evaluator.call(send_node(lvar(:other), :is_a?, expr('Base')),
+                          other: instance)).to eq(true)
+    expect(evaluator.call(send_node(lvar(:other), :is_a?, expr('String')),
+                          other: instance)).to eq(false)
+  end
+
+  it 'leaves is_a? unanswered when the superclass chain breaks' do
+    class_node = class_node_for(<<~RUBY)
+      class Widget < ActiveRecord::Base
+      end
+
+      class MyClass
+      end
+    RUBY
+    evaluator = described_class.new(class_node: class_node)
+    instance = Buttress::InstanceValue.new(class_path: 'Widget')
+
+    expect(evaluator.call(
+      send_node(lvar(:other), :is_a?, expr('ActiveRecord::Base')),
+      other: instance,
+    )).to eq(true)
+    expect do
+      evaluator.call(send_node(lvar(:other), :is_a?, expr('String')),
+                     other: instance)
+    end.to raise_error(Buttress::CannotEvaluate)
+  end
+
+  it 'answers respond_to? true for methods the instance class defines' do
+    class_node = class_node_for(<<~RUBY)
+      class Widget
+        attr_reader :name
+      end
+
+      class MyClass
+      end
+    RUBY
+    evaluator = described_class.new(class_node: class_node)
+    instance = Buttress::InstanceValue.new(class_path: 'Widget')
+
+    expect(evaluator.call(
+      send_node(lvar(:other), :respond_to?, n(:sym, :name)),
+      other: instance,
+    )).to eq(true)
+    expect do
+      evaluator.call(send_node(lvar(:other), :respond_to?, n(:sym, :nope)),
+                     other: instance)
+    end.to raise_error(Buttress::CannotEvaluate)
+  end
+
+  it 'evaluates self.class to a class reference' do
+    class_node = class_node_for("class MyClass\nend")
+    evaluator = described_class.new(
+      class_node: class_node, class_path: 'Foo::MyClass',
+    )
+
+    expect(evaluator.call(send_node(n(:self), :class), {}))
+      .to eq(Buttress::ClassReference.new('Foo::MyClass'))
+  end
+
   it 'populates Data members through super in initialize' do
     class_node = class_node_for(<<~RUBY)
       MyClass = Data.define(:name, :state)

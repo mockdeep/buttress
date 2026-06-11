@@ -44,6 +44,23 @@ module Buttress
       root && root.lookup_class(qualified_name.split('::').last)
     end
 
+    # Superclass names the named class declares across all of its
+    # definitions in the project. Empty means no definition we can see
+    # declares one — the class's superclass is implicitly Object, as
+    # far as the project's own sources are concerned.
+    def superclass_names(qualified_name)
+      key = qualified_name.sub(/\A::/, '')
+      names = superclass_index[key] ||
+              superclass_index.find { |k, _| k.end_with?("::#{key}") }&.last
+      (names || []).to_a
+    end
+
+    # Whether exactly one indexed class has this basename. Unqualified
+    # references are only trustworthy when the answer is unambiguous.
+    def unique_class_basename?(basename)
+      class_index.keys.count { |key| key.split('::').last == basename } == 1
+    end
+
     private
 
     def lookup(index, qualified_name)
@@ -53,22 +70,25 @@ module Buttress
     end
 
     def module_index
-      indexes.first
+      indexes[0]
     end
 
     def class_index
-      indexes.last
+      indexes[1]
+    end
+
+    def superclass_index
+      indexes[2]
     end
 
     def indexes
       @indexes ||= begin
-        modules = {}
-        classes = {}
+        index = { modules: {}, classes: {}, superclasses: {} }
         source_files.each do |file|
           ast = parse(file)
-          collect(ast, [], modules, classes, RootNode.new(ast)) if ast
+          collect(ast, [], index, RootNode.new(ast)) if ast
         end
-        [modules, classes]
+        [index[:modules], index[:classes], index[:superclasses]]
       end
     end
 
@@ -84,21 +104,31 @@ module Buttress
       nil
     end
 
-    def collect(node, namespace, modules, classes, root)
+    def collect(node, namespace, index, root)
       return unless node.is_a?(Parser::AST::Node)
 
       case node.type
       when :module, :class
         qualified = namespace + const_segments(node.children.first)
         key = qualified.join('::')
-        modules[key] ||= node if node.type == :module
-        classes[key] ||= root if node.type == :class
+        index[:modules][key] ||= node if node.type == :module
+        if node.type == :class
+          index[:classes][key] ||= root
+          if node.children[1]
+            segments = const_segments(node.children[1])
+            # A non-const superclass expression (Struct.new(...)) still
+            # disproves "no superclass"; record an unresolvable marker.
+            name = segments.any? ? segments.join('::') : '(unresolved)'
+            (index[:superclasses][key] ||= []) << name
+            index[:superclasses][key].uniq!
+          end
+        end
         node.children.drop(1).each do |child|
-          collect(child, qualified, modules, classes, root)
+          collect(child, qualified, index, root)
         end
       else
         node.children.each do |child|
-          collect(child, namespace, modules, classes, root)
+          collect(child, namespace, index, root)
         end
       end
     end

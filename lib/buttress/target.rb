@@ -67,6 +67,10 @@ module Buttress
       legacy_rspec? ? "pending '#{message}'" : "skip '#{message}'"
     end
 
+    def at_least?(other_version)
+      Gem::Version.new(version) >= Gem::Version.new(other_version)
+    end
+
     # Keyword-style hash syntax only exists from 1.9 on.
     def hash_pair(key, rendered_value)
       if version == '1.8'

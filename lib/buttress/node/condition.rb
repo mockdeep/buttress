@@ -17,15 +17,17 @@ class Condition
     :constructor_positional, :constructor_keywords
   )
 
-  attr_accessor :method_node, :path, :schema, :sources, :class_name
+  attr_accessor :method_node, :path, :schema, :sources, :class_name,
+                :target
 
   def initialize(method_node, path, schema: nil, sources: nil,
-                 class_name: nil)
+                 class_name: nil, target: nil)
     self.method_node = method_node
     self.path = path
     self.schema = schema
     self.sources = sources
     self.class_name = class_name
+    self.target = target
   end
 
   def description
@@ -217,6 +219,8 @@ class Condition
       class_node: class_node,
       model_attributes: model? ? attribute_store : nil,
       sources: sources,
+      class_path: class_name,
+      target: target,
     ).tap do |evaluator|
       unless model?
         evaluator.run_initialize(deep_dup(positional), deep_dup(keywords))
@@ -311,7 +315,7 @@ class Condition
   end
 
   def build_instance
-    return nil if model? || class_node.lookup_method(:initialize).nil?
+    return nil unless synthesizable?
 
     positional, keywords = default_constructor_inputs
     evaluator = build_evaluator(positional, keywords)
@@ -323,6 +327,20 @@ class Condition
     )
   rescue Buttress::CannotEvaluate
     nil
+  end
+
+  # A class with its own initialize is always constructible from
+  # solved inputs. Without one, Class.new is only safe when no
+  # definition declares a superclass (an inherited initialize could
+  # require arguments) and there are no Data members to populate.
+  def synthesizable?
+    return false if model?
+    return true if class_node.lookup_method(:initialize)
+    return false if class_node.data_members.any?
+
+    class_node.superclass_name.nil? &&
+      (sources.nil? ||
+       sources.superclass_names(class_name || class_node.name).empty?)
   end
 
   def constructor_inputs(overrides = {})
