@@ -2,6 +2,10 @@ require 'forwardable'
 
 module Buttress
   class Error < StandardError; end
+
+  # Raised when a path's solved inputs don't actually steer execution
+  # down that path — the branch condition evaluates the wrong way.
+  class UnsatisfiablePath < Error; end
 end
 
 require_relative "buttress/version"

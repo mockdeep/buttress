@@ -14,11 +14,13 @@ Ruby 1.8 / Rails 2 era) before modernizing them.
    even boot (missing gems, no database, dead Ruby versions). Don't add
    features that require loading user code.
 2. **Wrong tests are worse than no tests.** Anything buttress can't
-   solve, control, satisfy, or evaluate degrades to a skipped skeleton
-   test carrying the reason (`Condition#skip_reason`) — never a crash,
-   and never an assertion that might be wrong. Generated assertions are
-   self-verified: every path's predicates are re-checked against the
-   final concrete bindings before a concrete test is emitted.
+   satisfy or evaluate degrades to a skipped skeleton test carrying the
+   reason (`Condition#skip_reason`) — never a crash, and never an
+   assertion that might be wrong. Generated assertions are self-verified
+   concolically: each path's steps are replayed in execution order and
+   every branch predicate must concretely evaluate to its required
+   polarity before a concrete test is emitted. A crash during
+   generation is always a buttress bug, by definition.
 3. **Host Ruby ≠ target Ruby.** Buttress runs on modern Ruby but
    analyzes and emits code for the target codebase's version ('1.8'
    through '3.3'). Everything version-sensitive — parser grammar, spec
@@ -26,11 +28,15 @@ Ruby 1.8 / Rails 2 era) before modernizing them.
    `pending`/`skip`, hash rockets vs keyword hashes) — lives in
    `Buttress::Target`. New version-sensitive rendering goes there, not
    inline.
-4. **Evaluation is sandboxed by a purity whitelist.** The Evaluator only
+4. **Evaluation is sandboxed by purity whitelists.** The Evaluator only
    delegates method calls to the host Ruby for core types listed in
-   `Evaluator::PURE_METHODS`, on values it constructed itself. Extending
-   the whitelist is fine; adding impure methods (I/O, mutation of shared
-   state) is not.
+   `Evaluator::PURE_METHODS` (and `BLOCK_METHODS` for methods receiving
+   interpreted blocks), on values it constructed itself. Extending the
+   whitelists is fine; adding methods with external effects (I/O, global
+   state) is not. Mutators like `Array#<<` are allowed only because
+   `Condition` deep-dups bindings into the evaluation env — evaluation
+   must never mutate a value that gets rendered into the generated
+   test's inputs. Preserve that invariant.
 
 ## Architecture (the pipeline)
 
@@ -45,29 +51,74 @@ exe/buttress → Runner → Loader (reads file)
                             Predicate            tier-1 constraint solver
                             Evaluator            static interpreter (env + ivars + attrs)
                             ModelAttributes      schema-backed attribute store
-                          spec.erb               rendering, via Target dialect
+                          spec.erb / class_spec.erb   rendering, via Target dialect
                       → Writer (mirrors path into spec/, never overwrites)
 ```
 
+The CLI takes `'ClassName#method'` for one method (rendered with
+`spec.erb`) or bare `'ClassName'` for every public instance method
+(nested describes via `class_spec.erb`).
+
 - `PathEnumerator` walks a method body into `Path`s, splitting `if`/
-  `unless`/ternary/`case`/`&&`/`||` by short-circuit semantics and
-  collecting intermediate statements (assignments) along each path.
+  `unless`/ternary/`case`/`&&`/`||` by short-circuit semantics. Each
+  path's `steps` interleave intermediate statements and predicates in
+  execution order — order is load-bearing for the concolic replay.
 - `Predicate` classifies branch conditions (truthiness / comparison /
   query on args or receiverless attribute reads) and picks boundary
   values for both polarities. Unsupported forms report
   `solvable? == false` rather than raising.
-- `Condition` orchestrates a path: argument bindings, the attribute
-  store, controllability checks, satisfaction verification, and
-  `skip_reason`. Read `compute_skip_reason` to understand the degradation
-  ladder: cannot solve → cannot control → cannot satisfy → cannot
-  evaluate.
+- `Condition` orchestrates a path concolically: solve argument bindings
+  from predicates, then replay the path's steps in execution order —
+  evaluating statements and concretely checking each predicate against
+  the environment at its branch point. Outcomes: branch matches →
+  concrete test; branch doesn't match → skip ("cannot satisfy");
+  evaluation fails → skip ("cannot yet evaluate"). See
+  `Condition#env` and `#compute_skip_reason`.
 - `Evaluator` resolves sends through: real `def` (interpreted) →
   attr_reader/attr_writer macros → schema-declared model attributes →
-  `CannotEvaluate`.
+  `CannotEvaluate`. Constants resolve via `ClassNode#lookup_constant`;
+  unresolvable ones become `Buttress::ClassReference` — a symbolic value
+  supporting only equality and rendering (textual path comparison, by
+  design).
 - `Schema`/`ModelAttributes` are the fully static ActiveRecord adapter
   (parsed from `db/schema.rb`, never from a booted app). Attributes the
   evaluation touches are recorded and rendered into `Model.new(...)` so
   the real test takes the same branch.
+
+## Dogfooding (how the roadmap gets decided)
+
+Capabilities are prioritized by evidence, not speculation. The loop:
+
+```
+bin/dogfood DIR [TARGET_RUBY_VERSION]
+```
+
+runs buttress across every class under DIR (e.g. a sibling project's
+`lib/`, never written to disk) and prints totals, the concrete rate,
+skip reasons ranked by frequency, and crashes. How to read it:
+
+- **Crashes are always buttress bugs** (see principle 2) — fix the
+  degradation before anything else.
+- **The skip table is the ranked backlog.** Every skip message names the
+  exact missing capability; the biggest bucket is usually the next
+  milestone.
+- **Skips morphing is progress even when the concrete rate doesn't
+  move.** When a capability lands, its skips often convert into deeper,
+  truer skip reasons (e.g. "cannot evaluate: DEFAULT_MODE" became
+  "cannot evaluate: String#call" once constants resolved — evaluation
+  got further and found the real wall). Compare skip *reasons* across
+  runs, not just the rate.
+- **Distinguish capability gaps from genuine limits.** Methods that
+  depend on injected collaborators (e.g. calling `.call` on a
+  constructor argument) are out of reach for static analysis by design —
+  don't chase those buckets.
+- A "cannot satisfy" skip means buttress couldn't *find* inputs steering
+  that branch with the current solver, not that the branch is
+  unreachable. These are future-solver work items.
+
+After landing any evaluator/solver capability: run the full suite, add a
+golden-master composer spec, then re-run dogfood and compare the skip
+table to the previous run.
 
 ## Conventions and gotchas
 
@@ -88,8 +139,8 @@ exe/buttress → Runner → Loader (reads file)
   helpers). For end-to-end checks, generate a spec into `tmp/` and run
   it against the real fixture class; clean up after.
 - `tmp/` is scratch space, not part of the gem. Don't commit it.
-- Ruby 3 keyword separation: methods with keyword args (e.g.
-  `Predicate#satisfied_by?(env, evaluator:)`) need braces around hash
-  literals passed positionally.
+- Ruby 3 keyword separation: when a method takes both a positional arg
+  and keyword args, a hash literal passed positionally needs explicit
+  braces or it parses as keywords.
 - The gemspec's `required_ruby_version` describes the host (modern
   Ruby); 1.8 support refers to *target* codebases only.

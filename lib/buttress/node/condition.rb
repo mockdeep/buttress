@@ -82,30 +82,11 @@ class Condition
   private
 
   def compute_skip_reason
-    unsolved = path.predicates.reject(&:solvable?)
-    if unsolved.any?
-      return "Buttress cannot solve: #{unsolved.map(&:source).join(', ')}"
-    end
-
-    # A predicate on something that is neither a settable argument nor a
-    # model attribute can't be steered from the outside, and pretending
-    # otherwise would assert the wrong branch.
-    foreign = path.predicates.reject do |predicate|
-      controllable_names.include?(predicate.variable_name)
-    end
-    if foreign.any?
-      return "Buttress cannot control: #{foreign.map(&:source).join(', ')}"
-    end
-
-    unsatisfied = path.predicates.reject do |predicate|
-      predicate.satisfied_by?(bindings, evaluator: evaluator)
-    end
-    if unsatisfied.any?
-      return "Buttress cannot satisfy: #{unsatisfied.map(&:source).join(', ')}"
-    end
-
+    env
     return_value
     nil
+  rescue Buttress::UnsatisfiablePath => error
+    "Buttress cannot satisfy: #{error.message}"
   rescue Buttress::CannotEvaluate => error
     "Buttress cannot yet evaluate: #{error.message}"
   end
@@ -113,15 +94,6 @@ class Condition
   def constrained_names
     @constrained_names ||=
       path.predicates.select(&:solvable?).map(&:variable_name)
-  end
-
-  # Optional positional parameters are excluded: constraining one means
-  # rendering every preceding optional too, which isn't supported yet.
-  def controllable_names
-    settable = method_node.args.select do |param|
-      %i[arg kwarg kwoptarg].include?(param.type)
-    end
-    settable.map(&:name) + (columns ? columns.keys : [])
   end
 
   # Argument values for this path: declared or generated defaults,
@@ -160,13 +132,23 @@ class Condition
     nil
   end
 
-  # The environment at the end of the path: argument values plus the
-  # effects of the statements executed along the way. Deep-duped so
-  # evaluation can mutate values (list << x) without corrupting the
-  # bindings rendered into the generated call.
+  # The environment at the end of the path, produced by replaying the
+  # path's steps in execution order: statements are evaluated, and each
+  # predicate is concretely checked against the environment as it stood
+  # at that branch point — whether it constrains an argument, a computed
+  # local, or a helper method. Deep-duped so evaluation can mutate
+  # values (list << x) without corrupting the bindings rendered into the
+  # generated call.
   def env
-    @env ||= path.statements.each_with_object(deep_dup(bindings)) do |stmt, env|
-      evaluator.call(stmt, env)
+    @env ||= path.steps.each_with_object(deep_dup(bindings)) do |step, env|
+      case step
+      when Buttress::Predicate
+        taken = evaluator.call(step.node, env) ? true : false
+        raise Buttress::UnsatisfiablePath, step.source unless
+          taken == step.polarity
+      else
+        evaluator.call(step, env)
+      end
     end
   end
 

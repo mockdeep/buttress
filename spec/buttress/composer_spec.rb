@@ -529,7 +529,7 @@ RSpec.describe Buttress::Composer, '#call' do
     expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
   end
 
-  it 'generates skipped skeletons when a predicate cannot be solved' do
+  it 'generates skipped skeletons when a predicate cannot be evaluated' do
     code = <<~RUBY
       class MyClass
         def call_me(value)
@@ -545,7 +545,7 @@ RSpec.describe Buttress::Composer, '#call' do
     expected_tests = <<~RUBY
       RSpec.describe MyClass, '#call_me' do
         it 'returns "even" when value.even?' do
-          skip 'Buttress cannot solve: value.even?'
+          skip 'Buttress cannot yet evaluate: String#even?'
 
           my_class = MyClass.new
 
@@ -553,7 +553,7 @@ RSpec.describe Buttress::Composer, '#call' do
         end
 
         it 'returns "odd" when !(value.even?)' do
-          skip 'Buttress cannot solve: value.even?'
+          skip 'Buttress cannot yet evaluate: String#even?'
 
           my_class = MyClass.new
 
@@ -753,7 +753,7 @@ RSpec.describe Buttress::Composer, '#call' do
     expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
   end
 
-  it 'skips paths whose branch depends on a computed local' do
+  it 'concretely follows branches on computed locals' do
     code = <<~RUBY
       class MyClass
         def call_me(value)
@@ -770,7 +770,7 @@ RSpec.describe Buttress::Composer, '#call' do
     expected_tests = <<~RUBY
       RSpec.describe MyClass, '#call_me' do
         it 'returns "long" when half > 2' do
-          skip 'Buttress cannot control: half > 2'
+          skip 'Buttress cannot satisfy: half > 2'
 
           my_class = MyClass.new
 
@@ -778,7 +778,75 @@ RSpec.describe Buttress::Composer, '#call' do
         end
 
         it 'returns "short" when half <= 2' do
-          skip 'Buttress cannot control: half > 2'
+          my_class = MyClass.new
+
+          expect(my_class.call_me('blah1')).to eq('short')
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
+  end
+
+  it 'concretely follows branches on helper methods' do
+    code = <<~RUBY
+      class MyClass
+        def call_me
+          if ready?
+            'go'
+          else
+            'wait'
+          end
+        end
+
+        def ready?
+          true
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe MyClass, '#call_me' do
+        it 'returns "go" when ready? is true' do
+          my_class = MyClass.new
+
+          expect(my_class.call_me).to eq('go')
+        end
+
+        it 'returns "wait" when ready? is false' do
+          skip 'Buttress cannot satisfy: ready?'
+
+          my_class = MyClass.new
+
+          my_class.call_me
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
+  end
+
+  it 'follows guarded mutations of computed locals' do
+    code = <<~RUBY
+      class MyClass
+        def call_me(name)
+          names = name.split.select { |word| word.start_with?('@') }
+          names << '<none>' if names.empty?
+          names
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe MyClass, '#call_me' do
+        it 'returns names when names is empty' do
+          my_class = MyClass.new
+
+          expect(my_class.call_me('blah1')).to eq(["<none>"])
+        end
+
+        it 'returns names when names is not empty' do
+          skip 'Buttress cannot satisfy: names.empty?'
 
           my_class = MyClass.new
 

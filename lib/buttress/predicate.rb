@@ -57,17 +57,6 @@ module Buttress
       name
     end
 
-    # Whether the condition actually holds (with this polarity) under
-    # the given bindings. Guards against solved values for one predicate
-    # violating another predicate on the same variable. A class-aware
-    # evaluator can be supplied so attribute reads resolve.
-    def satisfied_by?(env, evaluator: Evaluator)
-      result = evaluator.call(node, env) ? true : false
-      result == polarity
-    rescue CannotEvaluate
-      false
-    end
-
     def source
       cleaned = node.location&.expression&.source&.gsub("'", '"')
       cleaned || "(#{node.type})"
