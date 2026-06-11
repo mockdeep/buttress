@@ -70,10 +70,14 @@ The CLI takes `'ClassName#method'` for one method (rendered with
 - `Condition` orchestrates a path concolically: solve argument bindings
   from predicates, then replay the path's steps in execution order —
   evaluating statements and concretely checking each predicate against
-  the environment at its branch point. Outcomes: branch matches →
-  concrete test; branch doesn't match → skip ("cannot satisfy");
+  the environment at its branch point. When the default-input replay
+  fails on a branch, a tier-2 search retries with mutated constructor
+  inputs (candidates harvested from literals the class compares
+  against, budget-capped) — the replay is the oracle, so a found
+  assignment is verified by construction. Outcomes: branch matches →
+  concrete test; no inputs found → skip ("cannot satisfy");
   evaluation fails → skip ("cannot yet evaluate"). See
-  `Condition#env` and `#compute_skip_reason`.
+  `Condition#solution` and `#compute_skip_reason`.
 - `Evaluator` resolves sends through: real `def` (interpreted) →
   attr_reader/attr_writer macros → schema-declared model attributes →
   `CannotEvaluate`. Constants resolve via `ClassNode#lookup_constant`;

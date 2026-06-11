@@ -1385,6 +1385,119 @@ RSpec.describe Buttress::Composer, '#call' do
     expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
   end
 
+  it 'searches constructor keywords to satisfy instance-state predicates' do
+    code = <<~RUBY
+      MyClass = Data.define(:state)
+
+      class MyClass
+        def initialize(state:)
+          super(state:)
+        end
+
+        def call_me
+          if checked?
+            'done'
+          else
+            'todo'
+          end
+        end
+
+        def checked?
+          state == "complete"
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe MyClass, '#call_me' do
+        it 'returns "done" when checked? is true' do
+          my_class = MyClass.new(state: 'complete')
+
+          expect(my_class.call_me).to eq('done')
+        end
+
+        it 'returns "todo" when checked? is false' do
+          my_class = MyClass.new(state: 'blah1')
+
+          expect(my_class.call_me).to eq('todo')
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
+  end
+
+  it 'searches positional constructor inputs to satisfy predicates' do
+    code = <<~RUBY
+      class MyClass
+        attr_reader :mode
+
+        def initialize(mode)
+          @mode = mode
+        end
+
+        def call_me
+          if admin?
+            'admin'
+          else
+            'guest'
+          end
+        end
+
+        def admin?
+          mode == "admin"
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe MyClass, '#call_me' do
+        it 'returns "admin" when admin? is true' do
+          my_class = MyClass.new('admin')
+
+          expect(my_class.call_me).to eq('admin')
+        end
+
+        it 'returns "guest" when admin? is false' do
+          my_class = MyClass.new('blah1')
+
+          expect(my_class.call_me).to eq('guest')
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
+  end
+
+  it 'still skips when no constructor input satisfies the branch' do
+    code = <<~RUBY
+      class MyClass
+        attr_reader :mode
+
+        def initialize(mode)
+          @mode = mode
+        end
+
+        def call_me
+          if locked?
+            'locked'
+          else
+            'open'
+          end
+        end
+
+        def locked?
+          mode.length > 100
+        end
+      end
+    RUBY
+
+    result = described_class.call(code, 'MyClass', 'call_me')
+
+    expect(result).to include("skip 'Buttress cannot satisfy: locked?'")
+    expect(result).to include("expect(my_class.call_me).to eq('open')")
+  end
+
   it 'finds classes nested inside modules and compact names' do
     code = <<~RUBY
       module Outer

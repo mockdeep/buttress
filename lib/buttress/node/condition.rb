@@ -2,6 +2,21 @@
 # argument values that steer execution down the path, the call that
 # exercises it, and the value it returns.
 class Condition
+  # Total candidate constructor assignments the tier-2 search may try
+  # for one path.
+  ATTEMPT_BUDGET = 100
+
+  # Literal node types harvested as candidate values.
+  LITERAL_TYPES = %i[str sym int].freeze
+
+  # A coherent solved world for one path: the constructor inputs, the
+  # evaluator whose instance state they produced, the method argument
+  # bindings, and the environment after replaying the path's steps.
+  Attempt = Struct.new(
+    :evaluator, :bindings, :env,
+    :constructor_positional, :constructor_keywords
+  )
+
   attr_accessor :method_node, :path, :schema, :sources
 
   def initialize(method_node, path, schema: nil, sources: nil)
@@ -24,7 +39,7 @@ class Condition
 
   def return_value
     @return_value ||= Buttress::Literal.render(
-      evaluator.call(path.return_node || nil_node, env),
+      solved.evaluator.call(path.return_node || nil_node, solved.env),
     )
   end
 
@@ -53,16 +68,16 @@ class Condition
 
   # Values for initialize's required positional parameters.
   def constructor_values
-    @constructor_values ||= constructor_params
-      .select { |param| param.type == :arg }
-      .map(&:value)
+    return default_constructor_inputs.first if solution.is_a?(Buttress::Error)
+
+    solution.constructor_positional
   end
 
   # Values for initialize's required keyword parameters.
   def constructor_keywords
-    @constructor_keywords ||= constructor_params
-      .select { |param| param.type == :kwarg }
-      .to_h { |param| [param.name, param.value] }
+    return default_constructor_inputs.last if solution.is_a?(Buttress::Error)
+
+    solution.constructor_keywords
   end
 
   # Attribute values for instantiating a model. Only meaningful after
@@ -83,7 +98,6 @@ class Condition
   private
 
   def compute_skip_reason
-    env
     return_value
     nil
   rescue Buttress::UnsatisfiablePath => error
@@ -92,31 +106,142 @@ class Condition
     "Buttress cannot yet evaluate: #{error.message}"
   end
 
-  def constrained_names
-    @constrained_names ||=
-      path.predicates.select(&:solvable?).map(&:variable_name)
+  # The solved world for this path, or the error explaining why none
+  # exists. Default inputs are tried first; when the replay fails on a
+  # branch, the tier-2 search tries harvested constructor inputs. The
+  # replay itself is the oracle, so any found assignment is verified by
+  # construction.
+  def solution
+    @solution ||= begin
+      solve
+    rescue Buttress::Error => error
+      error
+    end
+  end
+
+  def solved
+    raise solution if solution.is_a?(Buttress::Error)
+
+    solution
+  end
+
+  def solve
+    attempt(*default_constructor_inputs)
+  rescue Buttress::UnsatisfiablePath => error
+    search_constructor_inputs || raise(error)
+  end
+
+  # Tier-2: retries the replay with mutated constructor inputs, looking
+  # for values that steer every branch its required way. Failed
+  # attempts — wrong branch or unevaluable under those inputs — are
+  # discarded; exhaustion falls back to the original failure.
+  def search_constructor_inputs
+    return nil if model?
+
+    candidate_overrides.each do |overrides|
+      return attempt(*constructor_inputs(overrides))
+    rescue Buttress::UnsatisfiablePath, Buttress::CannotEvaluate
+      next
+    end
+    nil
+  end
+
+  # Constructor assignments to try: each parameter alone, then pairs,
+  # drawing values from the literals the class compares against.
+  def candidate_overrides
+    params = constructor_params
+      .select { |param| %i[arg kwarg].include?(param.type) }
+      .map(&:name)
+    values = comparison_literals
+    return [] if params.empty? || values.empty?
+
+    singles = params.flat_map do |name|
+      values.map { |value| { name => value } }
+    end
+    pairs = params.combination(2).flat_map do |first, second|
+      values.product(values).map do |first_value, second_value|
+        { first => first_value, second => second_value }
+      end
+    end
+    (singles + pairs).first(ATTEMPT_BUDGET)
+  end
+
+  # Literal values the class's own code compares against — the
+  # candidate pool for steering instance-state predicates.
+  def comparison_literals
+    harvest_literals(class_node.raw_node).uniq
+  end
+
+  def harvest_literals(node, found = [])
+    return found unless node.is_a?(Parser::AST::Node)
+
+    comparison_operands(node).each do |operand|
+      found << operand.children.last if LITERAL_TYPES.include?(operand.type)
+    end
+
+    node.children.each { |child| harvest_literals(child, found) }
+    found
+  end
+
+  # Operand nodes of equality comparisons and case/when clauses.
+  def comparison_operands(node)
+    operands =
+      case node.type
+      when :send
+        %i[== !=].include?(node.children[1]) ? node.children.values_at(0, 2) : []
+      when :when
+        node.children[0..-2]
+      else
+        []
+      end
+    operands.select { |operand| operand.is_a?(Parser::AST::Node) }
+  end
+
+  # Builds one coherent world from the given constructor inputs:
+  # construct the instance, derive argument bindings, then replay the
+  # path's steps in execution order — evaluating statements and
+  # concretely checking each predicate against the environment at its
+  # branch point. Bindings are deep-duped so evaluation can mutate
+  # values (list << x) without corrupting the rendered call.
+  def attempt(positional, keywords)
+    evaluator = build_evaluator(positional, keywords)
+    bindings = build_bindings(evaluator)
+    env = replay(evaluator, deep_dup(bindings))
+    Attempt.new(evaluator, bindings, env, positional, keywords)
+  end
+
+  def build_evaluator(positional, keywords)
+    Buttress::Evaluator.new(
+      class_node: class_node,
+      model_attributes: model? ? attribute_store : nil,
+      sources: sources,
+    ).tap do |evaluator|
+      unless model?
+        evaluator.run_initialize(deep_dup(positional), deep_dup(keywords))
+      end
+    end
   end
 
   # Argument values for this path: declared or generated defaults,
   # overridden by whatever the path's predicates require of the
   # method's parameters.
-  def bindings
-    @bindings ||= begin
-      defaults = {}
-      method_node.args.each { |param| assign_default(defaults, param) }
-
-      constraints = path.predicates
-        .select(&:solvable?)
-        .select { |predicate| defaults.key?(predicate.variable_name) }
-        .map(&:bindings)
-      defaults.merge(*constraints)
+  def build_bindings(evaluator)
+    defaults = {}
+    method_node.args.each do |param|
+      assign_default(defaults, param, evaluator)
     end
+
+    constraints = path.predicates
+      .select(&:solvable?)
+      .select { |predicate| defaults.key?(predicate.variable_name) }
+      .map(&:bindings)
+    defaults.merge(*constraints)
   end
 
   # A parameter whose declared default can't be evaluated gets no
   # binding at all, so reading it degrades to a skip instead of using a
   # wrong value.
-  def assign_default(defaults, param)
+  def assign_default(defaults, param, evaluator)
     case param.type
     when :arg, :kwarg
       defaults[param.name] = param.value
@@ -133,28 +258,64 @@ class Condition
     nil
   end
 
-  # The environment at the end of the path, produced by replaying the
-  # path's steps in execution order: statements are evaluated, and each
-  # predicate is concretely checked against the environment as it stood
-  # at that branch point — whether it constrains an argument, a computed
-  # local, or a helper method. Deep-duped so evaluation can mutate
-  # values (list << x) without corrupting the bindings rendered into the
-  # generated call.
-  def env
-    @env ||= path.steps.each_with_object(deep_dup(bindings)) do |step, env|
+  def replay(evaluator, env)
+    path.steps.each_with_object(env) do |step, acc|
       case step
       when Buttress::Predicate
-        taken = evaluator.call(step.node, env) ? true : false
+        taken = evaluator.call(step.node, acc) ? true : false
         raise Buttress::UnsatisfiablePath, step.source unless
           taken == step.polarity
       else
-        evaluator.call(step, env)
+        evaluator.call(step, acc)
       end
     end
   end
 
+  # Method argument bindings for rendering. A skipped path renders the
+  # default world's bindings.
+  def bindings
+    return fallback_bindings if solution.is_a?(Buttress::Error)
+
+    solution.bindings
+  end
+
+  def fallback_bindings
+    @fallback_bindings ||= build_bindings(quiet_evaluator)
+  end
+
+  # For rendering a skipped path's call: instance state from default
+  # inputs, with an unevaluable initialize contributing nothing.
+  def quiet_evaluator
+    build_evaluator(*default_constructor_inputs)
+  rescue Buttress::CannotEvaluate
+    Buttress::Evaluator.new(
+      class_node: class_node,
+      model_attributes: model? ? attribute_store : nil,
+      sources: sources,
+    )
+  end
+
+  def constructor_inputs(overrides = {})
+    positional = constructor_params
+      .select { |param| param.type == :arg }
+      .map { |param| overrides.fetch(param.name, param.value) }
+    keywords = constructor_params
+      .select { |param| param.type == :kwarg }
+      .to_h { |param| [param.name, overrides.fetch(param.name, param.value)] }
+    [positional, keywords]
+  end
+
+  def default_constructor_inputs
+    constructor_inputs
+  end
+
   def deep_dup(value)
     Marshal.load(Marshal.dump(value))
+  end
+
+  def constrained_names
+    @constrained_names ||=
+      path.predicates.select(&:solvable?).map(&:variable_name)
   end
 
   def class_node
@@ -184,22 +345,6 @@ class Condition
   def constructor_params
     init = class_node.lookup_method(:initialize)
     init ? init.args : []
-  end
-
-  # A class-aware evaluator with instance state populated by
-  # interpreting initialize (or backed by model attributes).
-  def evaluator
-    @evaluator ||= Buttress::Evaluator.new(
-      class_node: class_node,
-      model_attributes: model? ? attribute_store : nil,
-      sources: sources,
-    ).tap do |evaluator|
-      unless model?
-        evaluator.run_initialize(
-          deep_dup(constructor_values), deep_dup(constructor_keywords)
-        )
-      end
-    end
   end
 
   def nil_node
