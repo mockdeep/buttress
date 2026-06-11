@@ -7,6 +7,8 @@ module Buttress
         "'#{value}'"
       when Buttress::ClassReference
         value.path
+      when Buttress::InstanceValue
+        value.render
       else
         value.inspect
       end

@@ -83,19 +83,23 @@ module Buttress
     end
 
     # depth carries the interpretation depth across evaluators, so
-    # mutual recursion between classes still hits MAX_DEPTH.
+    # mutual recursion between classes still hits MAX_DEPTH. ivars
+    # seeds instance state, for dispatching onto an already-built
+    # InstanceValue.
     def initialize(class_node: nil, model_attributes: nil, sources: nil,
-                   depth: 0)
+                   depth: 0, ivars: {})
       @class_node = class_node
       @model_attributes = model_attributes
       @sources = sources
-      @ivars = {}
+      @ivars = ivars
       @constants = {}
       @modules = {}
       @classes = {}
       @resolving = []
       @depth = depth
     end
+
+    attr_reader :ivars
 
     # Interprets the class's initialize method (if any) to populate
     # instance state, using the given argument values.
@@ -108,6 +112,17 @@ module Buttress
     # class-method send resolved to this evaluator's class).
     def invoke_method(method, args, keywords = {})
       invoke(method, args, keywords)
+    end
+
+    # Entry point for a send resolved against this evaluator's class
+    # and instance state, used by instance-value dispatch.
+    def dispatch(operator, args, arg_nodes = [])
+      value = resolve_send(operator, args, arg_nodes)
+      if value.equal?(MISSING)
+        raise CannotEvaluate, "#{@class_node.name}##{operator}"
+      end
+
+      value
     end
 
     def call(node, env)
@@ -234,7 +249,25 @@ module Buttress
         result = invoke_class_method(receiver, operator, args, arg_nodes)
         return result unless result.equal?(MISSING)
       end
+      if receiver.is_a?(InstanceValue)
+        return invoke_on_instance(receiver, operator, args, arg_nodes)
+      end
+
       apply(receiver, operator, args)
+    end
+
+    # A send to another interpreted instance: resolve its class and
+    # dispatch in a child evaluator seeded with that instance's state.
+    def invoke_on_instance(instance, operator, args, arg_nodes)
+      class_node = resolve_class(instance.class_path)
+      unless class_node
+        raise CannotEvaluate, "#{instance.class_path}##{operator}"
+      end
+
+      Evaluator.new(
+        class_node: class_node, sources: @sources, depth: @depth,
+        ivars: instance.ivars,
+      ).dispatch(operator, args, arg_nodes)
     end
 
     # A method call on a symbolic class reference: resolve the class's
@@ -367,7 +400,14 @@ module Buttress
     # the class itself), then included modules, then schema-declared
     # model attributes (defined below user includes in the ancestry).
     def invoke_sibling(node, operator, args, arg_nodes = [])
-      raise CannotEvaluate, source(node) unless @class_node
+      value = resolve_send(operator, args, arg_nodes)
+      raise CannotEvaluate, source(node) if value.equal?(MISSING)
+
+      value
+    end
+
+    def resolve_send(operator, args, arg_nodes)
+      return MISSING unless @class_node
 
       method = @class_node.lookup_method(operator)
       return invoke_split(method, args, arg_nodes) if method
@@ -378,10 +418,7 @@ module Buttress
       method = included_module_method(operator)
       return invoke_split(method, args, arg_nodes) if method
 
-      value = model_attr_access(operator, args)
-      return value unless value.equal?(MISSING)
-
-      raise CannotEvaluate, source(node)
+      model_attr_access(operator, args)
     end
 
     def invoke_split(method, args, arg_nodes)

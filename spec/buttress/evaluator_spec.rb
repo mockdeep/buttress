@@ -497,6 +497,47 @@ RSpec.describe Buttress::Evaluator do
       .to eq([:extra])
   end
 
+  it 'dispatches sends on instance values to their class' do
+    class_node = class_node_for(<<~RUBY)
+      class Widget
+        attr_reader :name
+
+        def initialize(name)
+          @name = name
+        end
+
+        def shout
+          name.upcase
+        end
+      end
+
+      class MyClass
+      end
+    RUBY
+    evaluator = described_class.new(class_node: class_node)
+    instance = Buttress::InstanceValue.new(
+      class_path: 'Widget', positional: ['bob'], ivars: { :@name => 'bob' },
+    )
+
+    expect(evaluator.call(send_node(lvar(:other), :shout), other: instance))
+      .to eq('BOB')
+  end
+
+  it 'names the class when instance dispatch finds no method' do
+    class_node = class_node_for(<<~RUBY)
+      class Widget
+      end
+
+      class MyClass
+      end
+    RUBY
+    evaluator = described_class.new(class_node: class_node)
+    instance = Buttress::InstanceValue.new(class_path: 'Widget')
+
+    expect { evaluator.call(send_node(lvar(:other), :missing), other: instance) }
+      .to raise_error(Buttress::CannotEvaluate, /Widget#missing/)
+  end
+
   it 'populates Data members through super in initialize' do
     class_node = class_node_for(<<~RUBY)
       MyClass = Data.define(:name, :state)

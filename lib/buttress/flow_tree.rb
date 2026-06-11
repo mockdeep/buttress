@@ -70,9 +70,10 @@ module Buttress
     end
 
     def flows
-      method_node.conditions(schema, sources: sources).map do |condition|
-        Flow.new(condition, parent: self)
-      end
+      conditions = method_node.conditions(
+        schema, sources: sources, class_name: class_name,
+      )
+      conditions.map { |condition| Flow.new(condition, parent: self) }
     end
 
     def class_node

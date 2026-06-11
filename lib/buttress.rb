@@ -11,6 +11,7 @@ end
 require_relative "buttress/version"
 require_relative "buttress/inflector"
 require_relative "buttress/class_reference"
+require_relative "buttress/instance_value"
 require_relative "buttress/literal"
 require_relative "buttress/evaluator"
 require_relative "buttress/model_attributes"

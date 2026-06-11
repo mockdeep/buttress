@@ -87,7 +87,12 @@ The CLI takes `'ClassName#method'` for one method (rendered with
   rendering (textual path comparison, by design). A send *on* a
   ClassReference resolves the class (same file, then `Sources`) and
   interprets its singleton method in a fresh evaluator scoped to that
-  class, sharing the recursion depth budget.
+  class, sharing the recursion depth budget. A send on a
+  `Buttress::InstanceValue` (an interpreted instance: constructor
+  inputs + ivars, rendered as its own constructor call) dispatches the
+  same way, in a child evaluator seeded with that instance's state.
+  Condition synthesizes a same-class InstanceValue for parameters
+  named `other` (the comparison/equality protocol).
 - `Schema`/`ModelAttributes` are the fully static ActiveRecord adapter
   (parsed from `db/schema.rb`, never from a booted app). Attributes the
   evaluation touches are recorded and rendered into `Model.new(...)` so

@@ -1528,6 +1528,62 @@ RSpec.describe Buttress::Composer, '#call' do
     expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
   end
 
+  it 'synthesizes same-class instances for parameters named other' do
+    code = <<~RUBY
+      class MyClass
+        attr_reader :pos
+
+        def initialize(pos)
+          @pos = pos
+        end
+
+        def call_me(other)
+          pos <=> other.pos
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe MyClass, '#call_me' do
+        it 'returns pos <=> other.pos' do
+          my_class = MyClass.new('blah1')
+
+          expect(my_class.call_me(MyClass.new('blah1'))).to eq(0)
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
+  end
+
+  it 'renders synthesized Data instances with their keyword inputs' do
+    code = <<~RUBY
+      MyClass = Data.define(:pos)
+
+      class MyClass
+        def initialize(pos:)
+          super(pos:)
+        end
+
+        def call_me(other)
+          pos <=> other.pos
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe MyClass, '#call_me' do
+        it 'returns pos <=> other.pos' do
+          my_class = MyClass.new(pos: 'blah1')
+
+          expect(my_class.call_me(MyClass.new(pos: 'blah1'))).to eq(0)
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
+  end
+
   it 'finds classes nested inside modules and compact names' do
     code = <<~RUBY
       module Outer

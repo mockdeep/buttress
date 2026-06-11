@@ -17,13 +17,15 @@ class Condition
     :constructor_positional, :constructor_keywords
   )
 
-  attr_accessor :method_node, :path, :schema, :sources
+  attr_accessor :method_node, :path, :schema, :sources, :class_name
 
-  def initialize(method_node, path, schema: nil, sources: nil)
+  def initialize(method_node, path, schema: nil, sources: nil,
+                 class_name: nil)
     self.method_node = method_node
     self.path = path
     self.schema = schema
     self.sources = sources
+    self.class_name = class_name
   end
 
   def description
@@ -243,7 +245,10 @@ class Condition
   # wrong value.
   def assign_default(defaults, param, evaluator)
     case param.type
-    when :arg, :kwarg
+    when :arg
+      defaults[param.name] =
+        (param.name == :other && synthesized_instance) || param.value
+    when :kwarg
       defaults[param.name] = param.value
     when :optarg, :kwoptarg
       # Evaluated through the class-aware evaluator so defaults
@@ -293,6 +298,31 @@ class Condition
       model_attributes: model? ? attribute_store : nil,
       sources: sources,
     )
+  end
+
+  # Ruby's comparison/equality protocol: a parameter named `other` is
+  # idiomatically an instance of the same class. Synthesize one from
+  # default constructor inputs; anything that doesn't hold up degrades
+  # through the usual paths.
+  def synthesized_instance
+    return @synthesized_instance if defined?(@synthesized_instance)
+
+    @synthesized_instance = build_instance
+  end
+
+  def build_instance
+    return nil if model? || class_node.lookup_method(:initialize).nil?
+
+    positional, keywords = default_constructor_inputs
+    evaluator = build_evaluator(positional, keywords)
+    Buttress::InstanceValue.new(
+      class_path: class_name || class_node.name,
+      positional: positional,
+      keywords: keywords,
+      ivars: evaluator.ivars,
+    )
+  rescue Buttress::CannotEvaluate
+    nil
   end
 
   def constructor_inputs(overrides = {})
