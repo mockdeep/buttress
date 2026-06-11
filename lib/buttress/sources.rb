@@ -29,23 +29,46 @@ module Buttress
     end
 
     # The named module as a ModuleNode, or nil. Matches the full
-    # qualified name or a trailing segment of it, since an include
+    # qualified name or a trailing segment of it, since a reference
     # written inside a namespace omits the enclosing modules.
     def find_module(qualified_name)
-      name = qualified_name.sub(/\A::/, '')
-      node = module_index[name] ||
-             module_index.find { |key, _| key.end_with?("::#{name}") }&.last
+      node = lookup(module_index, qualified_name)
       node && ModuleNode.new(node)
+    end
+
+    # The named class as a ClassNode, or nil. Built through the
+    # defining file's own RootNode so the class's Data members,
+    # constants, and includes resolve in their home context.
+    def find_class(qualified_name)
+      root = lookup(class_index, qualified_name)
+      root && root.lookup_class(qualified_name.split('::').last)
     end
 
     private
 
+    def lookup(index, qualified_name)
+      name = qualified_name.sub(/\A::/, '')
+      index[name] ||
+        index.find { |key, _| key.end_with?("::#{name}") }&.last
+    end
+
     def module_index
-      @module_index ||= {}.tap do |index|
+      indexes.first
+    end
+
+    def class_index
+      indexes.last
+    end
+
+    def indexes
+      @indexes ||= begin
+        modules = {}
+        classes = {}
         source_files.each do |file|
           ast = parse(file)
-          collect_modules(ast, [], index) if ast
+          collect(ast, [], modules, classes, RootNode.new(ast)) if ast
         end
+        [modules, classes]
       end
     end
 
@@ -61,19 +84,21 @@ module Buttress
       nil
     end
 
-    def collect_modules(node, namespace, index)
+    def collect(node, namespace, modules, classes, root)
       return unless node.is_a?(Parser::AST::Node)
 
       case node.type
       when :module, :class
         qualified = namespace + const_segments(node.children.first)
-        index[qualified.join('::')] ||= node if node.type == :module
+        key = qualified.join('::')
+        modules[key] ||= node if node.type == :module
+        classes[key] ||= root if node.type == :class
         node.children.drop(1).each do |child|
-          collect_modules(child, qualified, index)
+          collect(child, qualified, modules, classes, root)
         end
       else
         node.children.each do |child|
-          collect_modules(child, namespace, index)
+          collect(child, namespace, modules, classes, root)
         end
       end
     end

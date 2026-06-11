@@ -18,6 +18,13 @@ class ClassNode < BaseNode
     node && MethodNode.new(node, parent_node: self)
   end
 
+  # A class-level method: `def self.x` (normalized to a plain def) or a
+  # def inside `class << self`.
+  def lookup_singleton_method(method_name)
+    node = find_singleton_method_node(raw_node, method_name.to_sym)
+    node && MethodNode.new(node, parent_node: self)
+  end
+
   def name
     children.first.children.last.to_s
   end
@@ -148,12 +155,41 @@ class ClassNode < BaseNode
     end
   end
 
+  # Walks for an instance method def, without descending into singleton
+  # scopes (class << self, def self.x) or nested class/module bodies —
+  # their defs are not instance methods of this class.
   def find_method_node(node, method_name)
     return nil unless node.is_a?(Parser::AST::Node)
     return node if node.type == :def && node.children.first == method_name
 
     node.children.each do |child|
+      next if child.is_a?(Parser::AST::Node) &&
+              %i[sclass defs class module].include?(child.type)
+
       found = find_method_node(child, method_name)
+      return found if found
+    end
+    nil
+  end
+
+  def find_singleton_method_node(node, method_name)
+    return nil unless node.is_a?(Parser::AST::Node)
+
+    if node.type == :defs && node.children[0].type == :self &&
+       node.children[1] == method_name
+      return Parser::AST::Node.new(:def, node.children.drop(1))
+    end
+
+    if node.type == :sclass && node.children.first.type == :self
+      found = find_method_node(node.children[1], method_name)
+      return found if found
+    end
+
+    node.children.each do |child|
+      next if child.is_a?(Parser::AST::Node) &&
+              %i[class module].include?(child.type)
+
+      found = find_singleton_method_node(child, method_name)
       return found if found
     end
     nil

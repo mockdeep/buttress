@@ -1,8 +1,14 @@
 class RootNode < BaseNode
   def find_class(class_name)
+    lookup_class(class_name) ||
+      raise(Buttress::Error, "class not found: #{class_name}")
+  end
+
+  # The named class by the last segment of its name, or nil.
+  def lookup_class(class_name)
     basename = class_name.split('::').last
     node = find_class_node(raw_node, basename)
-    raise Buttress::Error, "class not found: #{class_name}" unless node
+    return nil unless node
 
     ClassNode.new(
       node, parent_node: self, data_members: data_members_for(basename)

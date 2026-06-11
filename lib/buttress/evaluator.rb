@@ -41,13 +41,13 @@ module Buttress
       # into the evaluation env).
       Array => %i[
         + - * & | == != nil? [] << push concat length size empty? first
-        last reverse sort min max
+        last reverse sort min max any? none? one?
         sum uniq compact flatten include? index join slice take drop
         to_a inspect
       ],
       Hash => %i[== != nil? [] []= store delete fetch length size empty?
-                 keys values invert merge include? key? has_key?
-                 has_value? value? to_a inspect],
+                 any? none? one? keys values invert merge include? key?
+                 has_key? has_value? value? to_a inspect],
       Range => %i[== != nil? to_a min max first last size count sum
                   include? cover?],
     }.freeze
@@ -82,15 +82,19 @@ module Buttress
       new.call(node, env)
     end
 
-    def initialize(class_node: nil, model_attributes: nil, sources: nil)
+    # depth carries the interpretation depth across evaluators, so
+    # mutual recursion between classes still hits MAX_DEPTH.
+    def initialize(class_node: nil, model_attributes: nil, sources: nil,
+                   depth: 0)
       @class_node = class_node
       @model_attributes = model_attributes
       @sources = sources
       @ivars = {}
       @constants = {}
       @modules = {}
+      @classes = {}
       @resolving = []
-      @depth = 0
+      @depth = depth
     end
 
     # Interprets the class's initialize method (if any) to populate
@@ -98,6 +102,12 @@ module Buttress
     def run_initialize(args, keywords = {})
       init = @class_node&.lookup_method(:initialize)
       invoke(init, args, keywords) if init
+    end
+
+    # Entry point for another evaluator delegating a call here (a
+    # class-method send resolved to this evaluator's class).
+    def invoke_method(method, args, keywords = {})
+      invoke(method, args, keywords)
     end
 
     def call(node, env)
@@ -216,11 +226,40 @@ module Buttress
       args = arg_nodes.map { |arg_node| call(arg_node, env) }
 
       if receiver_node.nil? || receiver_node.type == :self
-        return invoke_sibling(node, operator, args)
+        return invoke_sibling(node, operator, args, arg_nodes)
       end
 
       receiver = call(receiver_node, env)
+      if receiver.is_a?(ClassReference)
+        result = invoke_class_method(receiver, operator, args, arg_nodes)
+        return result unless result.equal?(MISSING)
+      end
       apply(receiver, operator, args)
+    end
+
+    # A method call on a symbolic class reference: resolve the class's
+    # definition (same file first, then sibling sources) and interpret
+    # its singleton method in a fresh evaluator scoped to that class.
+    # MISSING when the class or method can't be found, so the caller
+    # degrades with the usual message.
+    def invoke_class_method(reference, operator, args, arg_nodes)
+      class_node = resolve_class(reference.path)
+      method = class_node&.lookup_singleton_method(operator)
+      return MISSING unless method
+
+      evaluator = Evaluator.new(
+        class_node: class_node, sources: @sources, depth: @depth,
+      )
+      positional, keywords = split_keywords(method, args, arg_nodes)
+      evaluator.invoke_method(method, positional, keywords)
+    end
+
+    def resolve_class(path)
+      return @classes[path] if @classes.key?(path)
+
+      root = @class_node&.parent_node
+      @classes[path] =
+        (root && root.lookup_class(path)) || @sources&.find_class(path)
     end
 
     # super in a reopened Data subclass's initialize assigns the member
@@ -327,22 +366,41 @@ module Buttress
     # own defs, then its attr macros and Data members (also methods on
     # the class itself), then included modules, then schema-declared
     # model attributes (defined below user includes in the ancestry).
-    def invoke_sibling(node, operator, args)
+    def invoke_sibling(node, operator, args, arg_nodes = [])
       raise CannotEvaluate, source(node) unless @class_node
 
       method = @class_node.lookup_method(operator)
-      return invoke(method, args) if method
+      return invoke_split(method, args, arg_nodes) if method
 
       value = class_attr_access(operator, args)
       return value unless value.equal?(MISSING)
 
       method = included_module_method(operator)
-      return invoke(method, args) if method
+      return invoke_split(method, args, arg_nodes) if method
 
       value = model_attr_access(operator, args)
       return value unless value.equal?(MISSING)
 
       raise CannotEvaluate, source(node)
+    end
+
+    def invoke_split(method, args, arg_nodes)
+      positional, keywords = split_keywords(method, args, arg_nodes)
+      invoke(method, positional, keywords)
+    end
+
+    # Ruby 3 callsite semantics for interpreted methods: a trailing
+    # hash literal binds to declared keyword parameters.
+    def split_keywords(method, args, arg_nodes)
+      keyworded = method.args.any? do |param|
+        %i[kwarg kwoptarg kwrestarg].include?(param.type)
+      end
+      unless keyworded && arg_nodes.last&.type == :hash &&
+             args.last.is_a?(Hash)
+        return [args, {}]
+      end
+
+      [args[0..-2], args.last]
     end
 
     # Accessors the class defines without a def to interpret:
@@ -417,6 +475,13 @@ module Buttress
     def bind_params(method, args, keywords)
       env = {}
       positional = args.dup
+      declared = method.args.select do |param|
+        %i[kwarg kwoptarg].include?(param.type)
+      end.map(&:name)
+      kwrest = method.args.any? { |param| param.type == :kwrestarg }
+      # An unknown keyword raises ArgumentError at runtime; binding it
+      # away silently could assert the wrong behavior.
+      cannot_bind(method) if !kwrest && (keywords.keys - declared).any?
 
       method.args.each do |param|
         name = param.name
@@ -435,7 +500,7 @@ module Buttress
           env[name] = positional.dup if name
           positional.clear
         when :kwrestarg
-          env[name] = {} if name
+          env[name] = keywords.except(*declared) if name
         when :blockarg
           nil
         else

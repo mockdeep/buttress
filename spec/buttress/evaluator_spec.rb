@@ -358,6 +358,145 @@ RSpec.describe Buttress::Evaluator do
       .to raise_error(Buttress::CannotEvaluate)
   end
 
+  it 'invokes def self singleton methods on same-file classes' do
+    class_node = class_node_for(<<~RUBY)
+      class Builder
+        def self.build(word)
+          word.upcase
+        end
+      end
+
+      class MyClass
+      end
+    RUBY
+    evaluator = described_class.new(class_node: class_node)
+
+    expect(evaluator.call(expr('Builder.build("hi")'), {})).to eq('HI')
+  end
+
+  it 'invokes class << self singleton methods on same-file classes' do
+    class_node = class_node_for(<<~RUBY)
+      class Builder
+        class << self
+          def build(word, suffix:)
+            word + suffix
+          end
+        end
+      end
+
+      class MyClass
+      end
+    RUBY
+    evaluator = described_class.new(class_node: class_node)
+
+    expect(evaluator.call(expr('Builder.build("hi", suffix: "!")'), {}))
+      .to eq('hi!')
+  end
+
+  it 'does not treat singleton defs as instance methods' do
+    class_node = class_node_for(<<~RUBY)
+      class MyClass
+        class << self
+          def helper
+            'singleton'
+          end
+        end
+      end
+    RUBY
+    evaluator = described_class.new(class_node: class_node)
+
+    expect { evaluator.call(send_node(nil, :helper), {}) }
+      .to raise_error(Buttress::CannotEvaluate)
+  end
+
+  it 'does not treat nested-class defs as instance methods' do
+    class_node = class_node_for(<<~RUBY)
+      class MyClass
+        class Inner
+          def helper
+            'inner'
+          end
+        end
+      end
+    RUBY
+    evaluator = described_class.new(class_node: class_node)
+
+    expect { evaluator.call(send_node(nil, :helper), {}) }
+      .to raise_error(Buttress::CannotEvaluate)
+  end
+
+  it 'binds trailing hash literals to keyword parameters of siblings' do
+    class_node = class_node_for(<<~'RUBY')
+      class MyClass
+        def greet(name, punct:)
+          "#{name}#{punct}"
+        end
+      end
+    RUBY
+    evaluator = described_class.new(class_node: class_node)
+
+    expect(evaluator.call(expr('greet("hi", punct: "!")'), {})).to eq('hi!')
+  end
+
+  it 'degrades for class references with no known definition' do
+    class_node = class_node_for("class MyClass\nend")
+    evaluator = described_class.new(class_node: class_node)
+
+    expect { evaluator.call(expr('Missing.build(1)'), {}) }
+      .to raise_error(Buttress::CannotEvaluate, /ClassReference#build/)
+  end
+
+  it 'stops mutual recursion across classes at the depth limit' do
+    class_node = class_node_for(<<~RUBY)
+      class AClass
+        def self.ping(number)
+          BClass.pong(number)
+        end
+      end
+
+      class BClass
+        def self.pong(number)
+          AClass.ping(number)
+        end
+      end
+
+      class MyClass
+      end
+    RUBY
+    evaluator = described_class.new(class_node: class_node)
+
+    expect { evaluator.call(expr('AClass.ping(1)'), {}) }
+      .to raise_error(Buttress::CannotEvaluate, /recursion/)
+  end
+
+  it 'refuses keywords the interpreted method does not declare' do
+    class_node = class_node_for(<<~RUBY)
+      class MyClass
+        def greet(punct:)
+          punct
+        end
+      end
+    RUBY
+    evaluator = described_class.new(class_node: class_node)
+
+    expect { evaluator.call(expr('greet(punct: "!", extra: 1)'), {}) }
+      .to raise_error(Buttress::CannotEvaluate, /cannot bind/)
+  end
+
+  it 'collects undeclared keywords into a keyword rest parameter' do
+    class_node = class_node_for(<<~RUBY)
+      class MyClass
+        def greet(punct:, **rest)
+          rest.keys
+        end
+      end
+    RUBY
+    evaluator = described_class.new(class_node: class_node)
+
+    expect(evaluator.call(expr('greet(punct: "!", extra: 1)'), {}))
+      .to eq([:extra])
+  end
+
   it 'populates Data members through super in initialize' do
     class_node = class_node_for(<<~RUBY)
       MyClass = Data.define(:name, :state)

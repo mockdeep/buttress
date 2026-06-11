@@ -78,12 +78,16 @@ The CLI takes `'ClassName#method'` for one method (rendered with
   concrete test; no inputs found → skip ("cannot satisfy");
   evaluation fails → skip ("cannot yet evaluate"). See
   `Condition#solution` and `#compute_skip_reason`.
-- `Evaluator` resolves sends through: real `def` (interpreted) →
-  attr_reader/attr_writer macros → schema-declared model attributes →
-  `CannotEvaluate`. Constants resolve via `ClassNode#lookup_constant`;
-  unresolvable ones become `Buttress::ClassReference` — a symbolic value
-  supporting only equality and rendering (textual path comparison, by
-  design).
+- `Evaluator` resolves receiverless sends in method lookup order: own
+  `def` (interpreted) → attr macros and Data members → `include`d
+  module defs (same file, then `Sources`) → schema-declared model
+  attributes → `CannotEvaluate`. Constants resolve via
+  `ClassNode#lookup_constant`; unresolvable ones become
+  `Buttress::ClassReference` — a symbolic value supporting equality and
+  rendering (textual path comparison, by design). A send *on* a
+  ClassReference resolves the class (same file, then `Sources`) and
+  interprets its singleton method in a fresh evaluator scoped to that
+  class, sharing the recursion depth budget.
 - `Schema`/`ModelAttributes` are the fully static ActiveRecord adapter
   (parsed from `db/schema.rb`, never from a booted app). Attributes the
   evaluation touches are recorded and rendered into `Model.new(...)` so

@@ -1498,6 +1498,36 @@ RSpec.describe Buttress::Composer, '#call' do
     expect(result).to include("expect(my_class.call_me).to eq('open')")
   end
 
+  it 'evaluates class-method calls on other classes' do
+    code = <<~'RUBY'
+      class Builder
+        class << self
+          def build(items, prefix:)
+            items.map { |item| "#{prefix}#{item}" }
+          end
+        end
+      end
+
+      class MyClass
+        def call_me
+          Builder.build([], prefix: "x")
+        end
+      end
+    RUBY
+
+    expected_tests = <<~'RUBY'
+      RSpec.describe MyClass, '#call_me' do
+        it 'returns Builder.build([], prefix: "x")' do
+          my_class = MyClass.new
+
+          expect(my_class.call_me).to eq([])
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
+  end
+
   it 'finds classes nested inside modules and compact names' do
     code = <<~RUBY
       module Outer

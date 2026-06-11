@@ -42,6 +42,63 @@ RSpec.describe Buttress::Sources do
     expect(sources.find_module('Comparable')).to be_nil
   end
 
+  it 'resolves classes defined in sibling files' do
+    File.write(File.join(root, 'lib/fake/builder.rb'), <<~RUBY)
+      module Fake
+        class Builder
+          def self.build(word)
+            word.upcase
+          end
+        end
+      end
+    RUBY
+
+    class_node = sources.find_class('Fake::Builder')
+
+    expect(class_node).not_to be_nil
+    expect(class_node.lookup_singleton_method(:build)).not_to be_nil
+  end
+
+  it 'resolves sibling-file classes with their Data members' do
+    File.write(File.join(root, 'lib/fake/item.rb'), <<~RUBY)
+      Fake::Item = Data.define(:name, :state)
+
+      class Fake::Item
+        def initialize(name:, state:)
+          super(name:, state:)
+        end
+      end
+    RUBY
+
+    expect(sources.find_class('Fake::Item').data_members)
+      .to eq(%i[name state])
+  end
+
+  it 'lets the composer evaluate class methods from sibling files' do
+    File.write(File.join(root, 'lib/fake/builder.rb'), <<~RUBY)
+      module Fake
+        class Builder
+          def self.build(items, prefix:)
+            items.map { |item| prefix + item }
+          end
+        end
+      end
+    RUBY
+    code = <<~RUBY
+      class MyClass
+        def call_me
+          Fake::Builder.build([], prefix: "x")
+        end
+      end
+    RUBY
+
+    result = Buttress::Composer.call(
+      code, 'MyClass', 'call_me', sources: sources,
+    )
+
+    expect(result).to include('expect(my_class.call_me).to eq([])')
+  end
+
   it 'lets the composer evaluate includes from sibling files' do
     code = <<~RUBY
       class MyClass
