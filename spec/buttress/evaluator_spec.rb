@@ -242,6 +242,69 @@ RSpec.describe Buttress::Evaluator do
       .to raise_error(Buttress::CannotEvaluate)
   end
 
+  it 'populates Data members through super in initialize' do
+    class_node = class_node_for(<<~RUBY)
+      MyClass = Data.define(:name, :state)
+
+      class MyClass
+        def initialize(name:, state:)
+          super(name: name, state: state)
+        end
+      end
+    RUBY
+    evaluator = described_class.new(class_node: class_node)
+    evaluator.run_initialize([], { name: 'bob', state: 'complete' })
+
+    expect(evaluator.call(send_node(nil, :name), {})).to eq('bob')
+    expect(evaluator.call(send_node(nil, :state), {})).to eq('complete')
+  end
+
+  it 'raises CannotEvaluate for super outside a Data subclass' do
+    class_node = class_node_for(<<~RUBY)
+      class MyClass
+        def initialize(name)
+          super(name)
+        end
+      end
+    RUBY
+    evaluator = described_class.new(class_node: class_node)
+
+    expect { evaluator.run_initialize(['bob']) }
+      .to raise_error(Buttress::CannotEvaluate)
+  end
+
+  it 'raises CannotEvaluate when super omits a Data member' do
+    class_node = class_node_for(<<~RUBY)
+      MyClass = Data.define(:name, :state)
+
+      class MyClass
+        def initialize(name:)
+          super(name: name)
+        end
+      end
+    RUBY
+    evaluator = described_class.new(class_node: class_node)
+
+    expect { evaluator.run_initialize([], { name: 'bob' }) }
+      .to raise_error(Buttress::CannotEvaluate)
+  end
+
+  it 'raises CannotEvaluate for positional super in a Data subclass' do
+    class_node = class_node_for(<<~RUBY)
+      MyClass = Data.define(:name)
+
+      class MyClass
+        def initialize(name)
+          super(name)
+        end
+      end
+    RUBY
+    evaluator = described_class.new(class_node: class_node)
+
+    expect { evaluator.run_initialize(['bob']) }
+      .to raise_error(Buttress::CannotEvaluate)
+  end
+
   it 'reads and writes schema-declared model attributes' do
     class_node = class_node_for("class MyClass\nend")
     store = Buttress::ModelAttributes.new(name: :string)

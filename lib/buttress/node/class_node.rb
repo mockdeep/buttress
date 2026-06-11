@@ -1,4 +1,13 @@
 class ClassNode < BaseNode
+  # Member names when this class reopens a `Const = Data.define(...)`
+  # assignment; empty for ordinary classes.
+  attr_accessor :data_members
+
+  def initialize(raw_node, parent_node: nil, data_members: [])
+    super(raw_node, parent_node: parent_node)
+    self.data_members = data_members
+  end
+
   def find_method(method_name)
     lookup_method(method_name) ||
       raise(Buttress::Error, "method not found: ##{method_name}")

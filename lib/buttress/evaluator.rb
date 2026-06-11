@@ -118,6 +118,7 @@ module Buttress
         value = node.children.first && call(node.children.first, env)
         throw :method_return, value
       when :send then evaluate_send(node, env)
+      when :super then evaluate_super(node, env)
       when :const then resolve_constant(node)
       when :begin
         node.children.map { |child| call(child, env) }.last
@@ -220,6 +221,27 @@ module Buttress
       apply(receiver, operator, args)
     end
 
+    # super in a reopened Data subclass's initialize assigns the member
+    # values. Only the keyword form is supported, and it must set every
+    # member — Data.new raises for missing members, so a partial super
+    # degrades rather than fabricating instance state.
+    def evaluate_super(node, env)
+      members = @class_node&.data_members || []
+      raise CannotEvaluate, source(node) if members.empty?
+
+      unless node.children.size == 1 && node.children.first.type == :hash
+        raise CannotEvaluate, source(node)
+      end
+
+      values = call(node.children.first, env)
+      unless values.keys.sort == members.sort
+        raise CannotEvaluate, source(node)
+      end
+
+      values.each { |name, value| @ivars[:"@#{name}"] = value }
+      nil
+    end
+
     def evaluate_block(node, names, body, env)
       send_node = node.children.first
       receiver_node, operator, *arg_nodes = send_node.children
@@ -308,7 +330,8 @@ module Buttress
       raise CannotEvaluate, source(node) unless @class_node
 
       if args.empty?
-        if @class_node.attr_readers.include?(operator)
+        if @class_node.attr_readers.include?(operator) ||
+           @class_node.data_members.include?(operator)
           return @ivars[:"@#{operator}"]
         end
         if @model_attributes&.column?(operator)

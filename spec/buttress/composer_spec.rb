@@ -1325,6 +1325,36 @@ RSpec.describe Buttress::Composer, '#call' do
     expect(result).to eq(expected_tests)
   end
 
+  it 'evaluates Data subclasses whose initialize assigns members via super' do
+    code = <<~'RUBY'
+      MyClass = Data.define(:icon, :name, :state)
+
+      class MyClass
+        def initialize(name:, state:, **_data)
+          icon = state == "complete" ? "x" : "o"
+          super(icon:, name:, state:)
+        end
+
+        def call_me
+          "#{icon} #{name}"
+        end
+      end
+    RUBY
+
+    expected_tests = <<~'RUBY'
+      RSpec.describe MyClass, '#call_me' do
+        it 'returns "#{icon} #{name}"' do
+          my_class = MyClass.new(name: 'blah1', state: 'blah2')
+
+          expect(my_class.call_me).to eq('o blah1')
+        end
+      end
+    RUBY
+
+    result = described_class.call(code, 'MyClass', 'call_me')
+    expect(result).to eq(expected_tests)
+  end
+
   it 'finds classes nested inside modules and compact names' do
     code = <<~RUBY
       module Outer
