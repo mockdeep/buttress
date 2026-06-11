@@ -12,7 +12,10 @@ Ruby 1.8 / Rails 2 era) before modernizing them.
 1. **Fully static.** Buttress never loads, requires, or executes the code
    under analysis. This is what lets it run against codebases that can't
    even boot (missing gems, no database, dead Ruby versions). Don't add
-   features that require loading user code.
+   features that require loading user code. Reading and parsing *more*
+   of the project is fine — `Buttress::Sources` parses sibling files
+   under the project's `lib/` and `app/` to resolve cross-file
+   constants — but parsed, never required.
 2. **Wrong tests are worse than no tests.** Anything buttress can't
    satisfy or evaluate degrades to a skipped skeleton test carrying the
    reason (`Condition#skip_reason`) — never a crash, and never an
@@ -37,23 +40,40 @@ Ruby 1.8 / Rails 2 era) before modernizing them.
    `Condition` deep-dups bindings into the evaluation env — evaluation
    must never mutate a value that gets rendered into the generated
    test's inputs. Preserve that invariant.
+5. **Static answers must be provable, not plausible.** Type predicates
+   (`is_a?`, `respond_to?`) answer tri-state: true, false, or degrade —
+   never a best guess. Falsity needs completeness (a fully resolved
+   superclass chain); unqualified constant references only match when
+   the project has exactly one class by that basename; host
+   `respond_to?` answers only *false* (method existence drifts across
+   Ruby versions; class identity doesn't), gated on target ≥ 1.9 and a
+   removal-history denylist. When extending the oracle, ask "can the
+   target runtime disagree?" — if yes, degrade.
 
 ## Architecture (the pipeline)
 
 ```
 exe/buttress → Runner → Loader (reads file)
                       → Schema.from_file (walks up for db/schema.rb)
+                      → Sources.from_file (walks up to Gemfile/.git root;
+                                           indexes lib/ + app/ classes,
+                                           modules, superclass declarations)
                       → Composer
                           Target#parse           parser-gem AST
-                          RootNode/ClassNode/MethodNode   node wrappers
+                          RootNode/ClassNode/ModuleNode/MethodNode   node wrappers
                           PathEnumerator         paths: predicates + statements + return node
                           Condition              one path, ready to render
                             Predicate            tier-1 constraint solver
                             Evaluator            static interpreter (env + ivars + attrs)
+                              ClassReference     symbolic unresolved constant
+                              InstanceValue      interpreted instance (inputs + ivars)
                             ModelAttributes      schema-backed attribute store
                           spec.erb / class_spec.erb   rendering, via Target dialect
                       → Writer (mirrors path into spec/, never overwrites)
 ```
+
+`bin/dogfood` builds one `Sources` per project root and reuses it
+across that project's files.
 
 The CLI takes `'ClassName#method'` for one method (rendered with
 `spec.erb`) or bare `'ClassName'` for every public instance method
@@ -94,7 +114,10 @@ The CLI takes `'ClassName#method'` for one method (rendered with
   inputs + ivars, rendered as its own constructor call) dispatches the
   same way, in a child evaluator seeded with that instance's state.
   Condition synthesizes a same-class InstanceValue for parameters
-  named `other` (the comparison/equality protocol).
+  named `other` (the comparison/equality protocol). Type predicates
+  the receiver's class doesn't define are answered by the static type
+  oracle under principle 5 (see the `host_type_query` /
+  `instance_type_query` section of the Evaluator).
 - `Schema`/`ModelAttributes` are the fully static ActiveRecord adapter
   (parsed from `db/schema.rb`, never from a booted app). Attributes the
   evaluation touches are recorded and rendered into `Model.new(...)` so
@@ -153,6 +176,26 @@ table to the previous run.
   Unit specs build AST nodes by hand (see evaluator/predicate specs for
   helpers). For end-to-end checks, generate a spec into `tmp/` and run
   it against the real fixture class; clean up after.
+- **`InstanceValue` holds only plain values** (class path string,
+  constructor inputs, ivars) — never AST nodes or node wrappers. The
+  replay deep-dups bindings with Marshal; anything unmarshalable in a
+  value type breaks every path it appears on. Classes re-resolve by
+  name at dispatch time instead.
+- **Never whitelist `hash` or `object_id`** (or anything else
+  process-seeded): the host-computed value differs run to run, so the
+  generated assertion would be flaky-wrong. `String#hash` skips are
+  permanent and correct.
+- **Instance vs singleton lookup:** `ClassNode#lookup_method` finds
+  instance defs only — it deliberately does not descend into
+  `class << self`, `def self.x`, or nested class/module bodies.
+  Class-level methods go through `lookup_singleton_method`. Don't
+  "fix" the walk to be more permissive; the scoping prevents wrong
+  interpretations.
+- Version-sensitive *evaluation* (not just rendering) gates on
+  `Target#at_least?` — see the host `respond_to?` rules and
+  `Evaluator::REMOVED_CORE_METHODS`. The target threads through
+  `Condition` into every child evaluator; dropping it silently
+  disables those answers.
 - `tmp/` is scratch space, not part of the gem. Don't commit it.
 - Ruby 3 keyword separation: when a method takes both a positional arg
   and keyword args, a hash literal passed positionally needs explicit
