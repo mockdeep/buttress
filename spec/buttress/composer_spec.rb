@@ -1584,7 +1584,7 @@ RSpec.describe Buttress::Composer, '#call' do
     expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
   end
 
-  it 'proves type guards false for synthesized same-class instances' do
+  it 'generates both branches of a type-guarded equality method' do
     code = <<~RUBY
       class MyClass
         attr_reader :name
@@ -1602,11 +1602,9 @@ RSpec.describe Buttress::Composer, '#call' do
     expected_tests = <<~RUBY
       RSpec.describe MyClass, '#call_me' do
         it 'returns name == other when other.is_a?(String)' do
-          skip 'Buttress cannot satisfy: other.is_a?(String)'
-
           my_class = MyClass.new('blah1')
 
-          my_class.call_me(MyClass.new('blah1'))
+          expect(my_class.call_me('blah1')).to eq(true)
         end
 
         it 'returns other.name == name when !(other.is_a?(String))' do

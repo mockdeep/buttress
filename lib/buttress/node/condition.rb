@@ -132,22 +132,45 @@ class Condition
   def solve
     attempt(*default_constructor_inputs)
   rescue Buttress::UnsatisfiablePath => error
-    search_constructor_inputs || raise(error)
+    search_inputs || raise(error)
   end
 
-  # Tier-2: retries the replay with mutated constructor inputs, looking
-  # for values that steer every branch its required way. Failed
-  # attempts — wrong branch or unevaluable under those inputs — are
-  # discarded; exhaustion falls back to the original failure.
-  def search_constructor_inputs
+  # Tier-2: retries the replay with mutated inputs, looking for values
+  # that steer every branch its required way. Failed attempts — wrong
+  # branch or unevaluable under those inputs — are discarded;
+  # exhaustion falls back to the original failure.
+  def search_inputs
     return nil if model?
 
-    candidate_overrides.each do |overrides|
-      return attempt(*constructor_inputs(overrides))
+    candidate_assignments.each do |constructor_overrides, binding_overrides|
+      return attempt(
+        *constructor_inputs(constructor_overrides),
+        binding_overrides: binding_overrides,
+      )
     rescue Buttress::UnsatisfiablePath, Buttress::CannotEvaluate
       next
     end
     nil
+  end
+
+  # All candidate worlds: constructor-input mutations crossed with
+  # argument-type alternatives, minus the all-default world already
+  # tried.
+  def candidate_assignments
+    constructor_options = [{}] + candidate_overrides
+    binding_options = [{}] + binding_alternatives
+    constructor_options.product(binding_options).drop(1)
+      .first(ATTEMPT_BUDGET)
+  end
+
+  # A synthesized `other` instance may steer type-guard branches the
+  # wrong way for paths reachable with plain values; offer the
+  # generated string default as the alternative.
+  def binding_alternatives
+    method_node.args
+      .select { |param| param.type == :arg && param.name == :other }
+      .select { synthesized_instance }
+      .map { |param| { param.name => param.value } }
   end
 
   # Constructor assignments to try: each parameter alone, then pairs,
@@ -207,9 +230,9 @@ class Condition
   # concretely checking each predicate against the environment at its
   # branch point. Bindings are deep-duped so evaluation can mutate
   # values (list << x) without corrupting the rendered call.
-  def attempt(positional, keywords)
+  def attempt(positional, keywords, binding_overrides: {})
     evaluator = build_evaluator(positional, keywords)
-    bindings = build_bindings(evaluator)
+    bindings = build_bindings(evaluator, binding_overrides)
     env = replay(evaluator, deep_dup(bindings))
     Attempt.new(evaluator, bindings, env, positional, keywords)
   end
@@ -231,11 +254,12 @@ class Condition
   # Argument values for this path: declared or generated defaults,
   # overridden by whatever the path's predicates require of the
   # method's parameters.
-  def build_bindings(evaluator)
+  def build_bindings(evaluator, binding_overrides = {})
     defaults = {}
     method_node.args.each do |param|
       assign_default(defaults, param, evaluator)
     end
+    defaults.merge!(binding_overrides)
 
     constraints = path.predicates
       .select(&:solvable?)

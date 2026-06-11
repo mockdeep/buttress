@@ -71,10 +71,12 @@ The CLI takes `'ClassName#method'` for one method (rendered with
   from predicates, then replay the path's steps in execution order —
   evaluating statements and concretely checking each predicate against
   the environment at its branch point. When the default-input replay
-  fails on a branch, a tier-2 search retries with mutated constructor
-  inputs (candidates harvested from literals the class compares
-  against, budget-capped) — the replay is the oracle, so a found
-  assignment is verified by construction. Outcomes: branch matches →
+  fails on a branch, a tier-2 search retries with mutated inputs —
+  constructor candidates harvested from literals the class compares
+  against, crossed with argument-type alternatives (a synthesized
+  `other` instance vs the plain string default), budget-capped. The
+  replay is the oracle, so a found assignment is verified by
+  construction. Outcomes: branch matches →
   concrete test; no inputs found → skip ("cannot satisfy");
   evaluation fails → skip ("cannot yet evaluate"). See
   `Condition#solution` and `#compute_skip_reason`.
