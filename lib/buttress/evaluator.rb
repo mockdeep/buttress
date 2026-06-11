@@ -82,11 +82,13 @@ module Buttress
       new.call(node, env)
     end
 
-    def initialize(class_node: nil, model_attributes: nil)
+    def initialize(class_node: nil, model_attributes: nil, sources: nil)
       @class_node = class_node
       @model_attributes = model_attributes
+      @sources = sources
       @ivars = {}
       @constants = {}
+      @modules = {}
       @resolving = []
       @depth = 0
     end
@@ -317,26 +319,39 @@ module Buttress
       names.each_with_index { |name, index| env[name] = block_args[index] }
     end
 
+    # Sentinel distinguishing "this layer doesn't define it" from any
+    # legitimately returned value, including nil.
+    MISSING = Object.new
+
+    # Receiverless sends resolve in method lookup order: the class's
+    # own defs, then its attr macros and Data members (also methods on
+    # the class itself), then included modules, then schema-declared
+    # model attributes (defined below user includes in the ancestry).
     def invoke_sibling(node, operator, args)
-      method = @class_node&.lookup_method(operator)
-      return invoke(method, args) if method
-
-      attr_access(node, operator, args)
-    end
-
-    # Falls back to attr_reader/attr_writer-declared accessors and
-    # schema-declared model attributes, which have no def to interpret.
-    def attr_access(node, operator, args)
       raise CannotEvaluate, source(node) unless @class_node
 
-      if args.empty?
-        if @class_node.attr_readers.include?(operator) ||
-           @class_node.data_members.include?(operator)
-          return @ivars[:"@#{operator}"]
-        end
-        if @model_attributes&.column?(operator)
-          return @model_attributes.read(operator)
-        end
+      method = @class_node.lookup_method(operator)
+      return invoke(method, args) if method
+
+      value = class_attr_access(operator, args)
+      return value unless value.equal?(MISSING)
+
+      method = included_module_method(operator)
+      return invoke(method, args) if method
+
+      value = model_attr_access(operator, args)
+      return value unless value.equal?(MISSING)
+
+      raise CannotEvaluate, source(node)
+    end
+
+    # Accessors the class defines without a def to interpret:
+    # attr_reader/attr_writer macros and Data members.
+    def class_attr_access(operator, args)
+      if args.empty? &&
+         (@class_node.attr_readers.include?(operator) ||
+          @class_node.data_members.include?(operator))
+        return @ivars[:"@#{operator}"]
       end
 
       if operator.to_s.end_with?('=') && args.size == 1
@@ -344,12 +359,47 @@ module Buttress
         if @class_node.attr_writers.include?(attr)
           return @ivars[:"@#{attr}"] = args.first
         end
-        if @model_attributes&.column?(attr)
+      end
+
+      MISSING
+    end
+
+    def model_attr_access(operator, args)
+      return MISSING unless @model_attributes
+
+      if args.empty? && @model_attributes.column?(operator)
+        return @model_attributes.read(operator)
+      end
+
+      if operator.to_s.end_with?('=') && args.size == 1
+        attr = operator.to_s.chomp('=').to_sym
+        if @model_attributes.column?(attr)
           return @model_attributes.write(attr, args.first)
         end
       end
 
-      raise CannotEvaluate, source(node)
+      MISSING
+    end
+
+    # The first definition among included modules, in lookup order.
+    # Module methods interpret in this evaluator, sharing self and
+    # instance state, which mirrors include semantics. Unresolvable
+    # modules (gems, stdlib) are skipped silently so the caller
+    # degrades with the original message.
+    def included_module_method(operator)
+      @class_node.included_modules.each do |name|
+        method = resolve_module(name)&.lookup_method(operator)
+        return method if method
+      end
+      nil
+    end
+
+    def resolve_module(name)
+      return @modules[name] if @modules.key?(name)
+
+      @modules[name] =
+        @class_node.parent_node&.find_module(name) ||
+        @sources&.find_module(name)
     end
 
     def invoke(method, args, keywords = {})

@@ -1355,6 +1355,36 @@ RSpec.describe Buttress::Composer, '#call' do
     expect(result).to eq(expected_tests)
   end
 
+  it 'evaluates methods from an included module' do
+    code = <<~RUBY
+      module Helpers
+        def shout(word)
+          word.upcase
+        end
+      end
+
+      class MyClass
+        include Helpers
+
+        def call_me(name)
+          shout(name)
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe MyClass, '#call_me' do
+        it 'returns shout(name)' do
+          my_class = MyClass.new
+
+          expect(my_class.call_me('blah1')).to eq('BLAH1')
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
+  end
+
   it 'finds classes nested inside modules and compact names' do
     code = <<~RUBY
       module Outer

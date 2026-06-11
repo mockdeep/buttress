@@ -14,7 +14,7 @@ module Buttress
     # With a method name, generates a spec for that one method; without,
     # generates a spec covering every public instance method.
     def call(code, class_name, method_name = nil, target: Target.default,
-             schema: nil)
+             schema: nil, sources: nil)
       root_node = RootNode.new(target.parse(code))
       flow_trees = method_names(root_node, class_name, method_name).map do |name|
         FlowTree.new(
@@ -23,6 +23,7 @@ module Buttress
           method_name: name,
           target: target,
           schema: schema,
+          sources: sources,
         )
       end
 

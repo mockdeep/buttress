@@ -40,9 +40,13 @@ end
 stats = Hash.new(0)
 skips = Hash.new(0)
 crashes = Hash.new { |hash, key| hash[key] = [] }
+sources_cache = {}
 
 Dir.glob(File.join(dir, "**", "*.rb")).sort.each do |file|
   code = File.read(file)
+  root_dir = Buttress::Sources.find_root(File.expand_path(File.dirname(file)))
+  sources = root_dir &&
+    (sources_cache[root_dir] ||= Buttress::Sources.new(root_dir, target: target))
   begin
     root = RootNode.new(target.parse(code))
   rescue StandardError => error
@@ -64,7 +68,7 @@ Dir.glob(File.join(dir, "**", "*.rb")).sort.each do |file|
       stats[:methods] += 1
       begin
         output = Buttress::Composer.call(
-          code, class_name, method_name.to_s, target: target,
+          code, class_name, method_name.to_s, target: target, sources: sources,
         )
       rescue StandardError => error
         stats[:crashed_methods] += 1

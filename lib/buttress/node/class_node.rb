@@ -76,6 +76,21 @@ class ClassNode < BaseNode
     nil
   end
 
+  # Names of modules mixed in with `include`, in method lookup order:
+  # a later include statement sits closer to the class than an earlier
+  # one, while arguments of a single include keep their written order.
+  def included_modules
+    statements = body_statements.filter_map do |stmt|
+      next unless stmt.is_a?(Parser::AST::Node) && stmt.type == :send
+
+      receiver, macro, *args = stmt.children
+      next unless receiver.nil? && macro == :include
+
+      args.filter_map { |arg| qualified_const_name(arg) }
+    end
+    statements.reverse.flatten
+  end
+
   def attr_readers
     attr_names(:reader)
   end
@@ -116,6 +131,21 @@ class ClassNode < BaseNode
     return [] if body.nil?
 
     body.type == :begin ? body.children : [body]
+  end
+
+  # The dotted path of a constant node, or nil for anything fancier
+  # (Module.new, splats) — those includes just resolve to nothing.
+  def qualified_const_name(node)
+    return nil unless node.is_a?(Parser::AST::Node) && node.type == :const
+
+    scope, name = node.children
+    case scope&.type
+    when nil then name.to_s
+    when :const
+      prefix = qualified_const_name(scope)
+      prefix && "#{prefix}::#{name}"
+    when :cbase then "::#{name}"
+    end
   end
 
   def find_method_node(node, method_name)

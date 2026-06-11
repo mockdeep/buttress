@@ -53,21 +53,24 @@ module Buttress
   end
 
   class FlowTree
-    attr_accessor :root_node, :class_name, :method_name, :target, :schema
+    attr_accessor :root_node, :class_name, :method_name, :target, :schema,
+                  :sources
 
     extend Forwardable
     delegate [:instance_name] => :class_node
 
-    def initialize(root_node, class_name:, method_name:, target:, schema: nil)
+    def initialize(root_node, class_name:, method_name:, target:,
+                   schema: nil, sources: nil)
       self.root_node = root_node
       self.class_name = class_name
       self.method_name = method_name
       self.target = target
       self.schema = schema
+      self.sources = sources
     end
 
     def flows
-      method_node.conditions(schema).map do |condition|
+      method_node.conditions(schema, sources: sources).map do |condition|
         Flow.new(condition, parent: self)
       end
     end

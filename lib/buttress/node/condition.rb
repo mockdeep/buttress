@@ -2,12 +2,13 @@
 # argument values that steer execution down the path, the call that
 # exercises it, and the value it returns.
 class Condition
-  attr_accessor :method_node, :path, :schema
+  attr_accessor :method_node, :path, :schema, :sources
 
-  def initialize(method_node, path, schema: nil)
+  def initialize(method_node, path, schema: nil, sources: nil)
     self.method_node = method_node
     self.path = path
     self.schema = schema
+    self.sources = sources
   end
 
   def description
@@ -191,6 +192,7 @@ class Condition
     @evaluator ||= Buttress::Evaluator.new(
       class_node: class_node,
       model_attributes: model? ? attribute_store : nil,
+      sources: sources,
     ).tap do |evaluator|
       unless model?
         evaluator.run_initialize(

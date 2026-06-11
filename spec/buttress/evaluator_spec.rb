@@ -242,6 +242,122 @@ RSpec.describe Buttress::Evaluator do
       .to raise_error(Buttress::CannotEvaluate)
   end
 
+  it 'invokes methods from modules included in the same file' do
+    class_node = class_node_for(<<~RUBY)
+      module Helpers
+        def shout(word)
+          word.upcase
+        end
+      end
+
+      class MyClass
+        include Helpers
+      end
+    RUBY
+    evaluator = described_class.new(class_node: class_node)
+
+    expect(evaluator.call(send_node(nil, :shout, str('hi')), {})).to eq('HI')
+  end
+
+  it 'lets module methods read the including instance state' do
+    class_node = class_node_for(<<~'RUBY')
+      module Helpers
+        def label
+          "#{prefix}!"
+        end
+      end
+
+      class MyClass
+        include Helpers
+        attr_reader :prefix
+
+        def initialize(prefix)
+          @prefix = prefix
+        end
+      end
+    RUBY
+    evaluator = described_class.new(class_node: class_node)
+    evaluator.run_initialize(['hi'])
+
+    expect(evaluator.call(send_node(nil, :label), {})).to eq('hi!')
+  end
+
+  it 'prefers methods defined on the class over included modules' do
+    class_node = class_node_for(<<~RUBY)
+      module Helpers
+        def label
+          'module'
+        end
+      end
+
+      class MyClass
+        include Helpers
+
+        def label
+          'class'
+        end
+      end
+    RUBY
+    evaluator = described_class.new(class_node: class_node)
+
+    expect(evaluator.call(send_node(nil, :label), {})).to eq('class')
+  end
+
+  it 'prefers attr_reader accessors over included module methods' do
+    class_node = class_node_for(<<~RUBY)
+      module Helpers
+        def label
+          'module'
+        end
+      end
+
+      class MyClass
+        include Helpers
+        attr_reader :label
+
+        def initialize(label)
+          @label = label
+        end
+      end
+    RUBY
+    evaluator = described_class.new(class_node: class_node)
+    evaluator.run_initialize(['attr'])
+
+    expect(evaluator.call(send_node(nil, :label), {})).to eq('attr')
+  end
+
+  it 'prefers included module methods over model attributes' do
+    class_node = class_node_for(<<~RUBY)
+      module Helpers
+        def name
+          'module'
+        end
+      end
+
+      class MyClass
+        include Helpers
+      end
+    RUBY
+    store = Buttress::ModelAttributes.new(name: :string)
+    evaluator = described_class.new(
+      class_node: class_node, model_attributes: store,
+    )
+
+    expect(evaluator.call(send_node(nil, :name), {})).to eq('module')
+  end
+
+  it 'degrades when an included module cannot be resolved' do
+    class_node = class_node_for(<<~RUBY)
+      class MyClass
+        include Comparable
+      end
+    RUBY
+    evaluator = described_class.new(class_node: class_node)
+
+    expect { evaluator.call(send_node(nil, :clamp_me), {}) }
+      .to raise_error(Buttress::CannotEvaluate)
+  end
+
   it 'populates Data members through super in initialize' do
     class_node = class_node_for(<<~RUBY)
       MyClass = Data.define(:name, :state)

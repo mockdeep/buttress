@@ -4,10 +4,34 @@ class RootNode < BaseNode
     node = find_class_node(raw_node, basename)
     raise Buttress::Error, "class not found: #{class_name}" unless node
 
-    ClassNode.new(node, data_members: data_members_for(basename))
+    ClassNode.new(
+      node, parent_node: self, data_members: data_members_for(basename)
+    )
+  end
+
+  # A module defined in this file, by the last segment of its name, or
+  # nil.
+  def find_module(module_name)
+    node = find_module_node(raw_node, module_name.split('::').last)
+    node && ModuleNode.new(node, parent_node: self)
   end
 
   private
+
+  def find_module_node(node, basename)
+    return nil unless node.is_a?(Parser::AST::Node)
+
+    if node.type == :module &&
+       node.children.first.children.last.to_s == basename
+      return node
+    end
+
+    node.children.each do |child|
+      found = find_module_node(child, basename)
+      return found if found
+    end
+    nil
+  end
 
   # Member names from a sibling `Const = Data.define(:a, :b)` assignment
   # matching the class's basename — the reopened-Data-subclass idiom.

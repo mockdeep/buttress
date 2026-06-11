@@ -9,7 +9,8 @@ module Buttress
       code, class_name, method_name = Loader.call(path, class_and_method)
       test_code = Composer.call(
         code, class_name, method_name,
-        target: target, schema: find_schema(path)
+        target: target, schema: find_schema(path),
+        sources: Sources.from_file(path, target: target)
       )
       Writer.call(path, test_code)
     end
