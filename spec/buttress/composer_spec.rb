@@ -2322,4 +2322,66 @@ RSpec.describe Buttress::Composer, '#call' do
 
     expect(described_class.call(code, 'MyClass')).to eq(expected_tests)
   end
+
+  it 'gates instance assertions on provable value equality' do
+    code = <<~RUBY
+      class Widget
+        def initialize(label)
+          @label = label
+        end
+      end
+
+      class Token
+        def ==(other)
+          other.is_a?(self.class)
+        end
+      end
+
+      class Builder
+        def build
+          Widget.new('x')
+        end
+
+        def issue
+          Token.new
+        end
+
+        def build_all
+          [Widget.new('x')]
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe Builder do
+        describe '#build' do
+          it 'returns Widget.new("x")' do
+            builder = Builder.new
+
+            expect(builder.build).to be_an_instance_of(Widget)
+          end
+        end
+
+        describe '#issue' do
+          it 'returns Token.new' do
+            builder = Builder.new
+
+            expect(builder.issue).to eq(Token.new)
+          end
+        end
+
+        describe '#build_all' do
+          it 'returns [Widget.new("x")]' do
+            skip 'Buttress cannot yet evaluate: instance equality not provable for [Widget.new("x")]'
+
+            builder = Builder.new
+
+            builder.build_all
+          end
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'Builder')).to eq(expected_tests)
+  end
 end

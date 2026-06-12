@@ -44,8 +44,34 @@ class Condition
     path.return_node&.location&.expression&.source || 'nil'
   end
 
+  # The rendered expected value for an eq assertion. A value holding
+  # an interpreted instance without provable value equality can't
+  # assert by eq: a bare one falls back to the type assertion (see
+  # #type_assertion_class), and a container of them degrades the path
+  # to a skip.
   def return_value
-    @return_value ||= Buttress::Literal.render(solved.return_value)
+    @return_value ||= begin
+      value = solved.return_value
+      unless equality_renderable?(value) ||
+             value.is_a?(Buttress::InstanceValue)
+        raise Buttress::CannotEvaluate,
+              "instance equality not provable for #{return_name}"
+      end
+      Buttress::Literal.render(value)
+    end
+  end
+
+  # The class to assert with be_an_instance_of when the return value
+  # is an interpreted instance whose equality isn't provable —
+  # rendering eq(Klass.new(...)) would compare by identity at test
+  # runtime and fail. nil when the value asserts by eq.
+  def type_assertion_class
+    return nil if skip_reason
+
+    value = solved.return_value
+    return nil unless value.is_a?(Buttress::InstanceValue)
+
+    value.class_path unless equality_renderable?(value)
   end
 
   # Values for the method call's required positional parameters.
@@ -117,16 +143,14 @@ class Condition
   end
 
   # Whether a synthesized reader path is worth emitting: the world
-  # solved, the value renders safely under eq (no interpreted
-  # instances — their classes may not define value equality, so the
-  # rendered constructor call could compare by identity and fail), and
-  # the member doesn't just echo the constructor input passed under
-  # the same name (true, but trivial).
+  # solved and asserts safely (skip_reason covers containers of
+  # unprovable instances; a bare one falls back to the type
+  # assertion), and the member doesn't just echo the constructor
+  # input passed under the same name (true, but trivial).
   def informative_reader?
     return false if skip_reason
 
-    value = solved.return_value
-    plainly_renderable?(value) && !echoes_input?(value)
+    !echoes_input?(solved.return_value)
   end
 
   protected
@@ -385,33 +409,79 @@ class Condition
     instance.class_path == (class_name || class_node.name)
   end
 
-  # Value classes whose rendered literal compares by value at test
-  # runtime (ClassReference renders as the constant, where eq is class
-  # identity — also sound).
+  # Value classes whose rendered form provably asserts at test
+  # runtime: plain literals compare by value, a ClassReference renders
+  # as the constant (eq is class identity), and a SubjectCall
+  # re-derives both sides in the test's own process by construction.
   PLAIN_RENDERABLE = [
     NilClass, TrueClass, FalseClass, String, Symbol, Integer, Float,
-    Buttress::ClassReference
+    Buttress::ClassReference, Buttress::SubjectCall
   ].freeze
 
-  def plainly_renderable?(value)
+  # Whether a rendered eq assertion on the value provably holds at
+  # test runtime: plain values compare by value, containers recurse,
+  # and interpreted instances need provable value equality.
+  def equality_renderable?(value)
     case value
     when Array
-      value.all? { |element| plainly_renderable?(element) }
+      value.all? { |element| equality_renderable?(element) }
     when Hash
       value.all? do |key, element|
-        plainly_renderable?(key) && plainly_renderable?(element)
+        equality_renderable?(key) && equality_renderable?(element)
       end
+    when Buttress::InstanceValue
+      provable_instance_equality?(value)
     else
       PLAIN_RENDERABLE.any? { |klass| value.is_a?(klass) }
     end
   end
 
-  # Whether the value is exactly what the rendered constructor call
-  # passes under this member's name.
+  # A class defining its own == is probed concolically: the evaluator
+  # interprets `value == <copy of value>`, and only a concrete true
+  # proves the rendered pair equal. A Data class without its own ==
+  # compares member-wise, so the pair is provably equal when the
+  # members are. Anything else falls to Object#==, which compares
+  # identity — the rendered assertion would fail.
+  def provable_instance_equality?(instance)
+    foreign = resolve_foreign_class(instance.class_path)
+    return false unless foreign
+
+    if foreign.lookup_method(:==)
+      equality_probe(instance)
+    elsif foreign.data_members.any?
+      instance.ivars.values.all? { |value| equality_renderable?(value) }
+    else
+      false
+    end
+  end
+
+  def equality_probe(instance)
+    node = Parser::AST::Node.new(
+      :send,
+      [Parser::AST::Node.new(:lvar, [:__buttress_left]), :==,
+       Parser::AST::Node.new(:lvar, [:__buttress_right])],
+    )
+    env = {
+      __buttress_left: deep_dup(instance),
+      __buttress_right: deep_dup(instance),
+    }
+    solved.evaluator.call(node, env) == true
+  rescue Buttress::CannotEvaluate
+    false
+  end
+
+  # Whether the value is, as rendered, exactly what the constructor
+  # call passes under this member's name — the generated test would
+  # assert an input back at itself.
   def echoes_input?(value)
     member = method_node.name.to_sym
     passed = passed_constructor_inputs
-    passed.key?(member) && passed[member] == value
+    return false unless passed.key?(member)
+
+    Buttress::Literal.render(passed[member]) ==
+      Buttress::Literal.render(value)
+  rescue Buttress::CannotEvaluate
+    false
   end
 
   def passed_constructor_inputs

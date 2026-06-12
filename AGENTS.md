@@ -95,10 +95,9 @@ def the macro defines and the standard pipeline solves and renders
 it, so a reader asserts the value the constructor actually computed
 (defaulted keywords, derived members). Reader flows are *filtered*,
 never skipped (`Condition#informative_reader?`): a reader is not a
-source path, so one whose world can't solve, whose value just echoes
-the constructor input passed under the same name, or whose value
-doesn't render safely under `eq` (interpreted instances — see the
-value-equality gap below) simply gets no test.
+source path, so one whose world can't solve or whose value just
+echoes the constructor input passed under the same name simply gets
+no test.
 
 - `PathEnumerator` walks a method body into `Path`s, splitting `if`/
   `unless`/ternary/`case`/`&&`/`||` by short-circuit semantics. Each
@@ -295,15 +294,17 @@ diff branch and compare assertions instead.
   move (each scalar slot also offers its sibling slots' current
   values) is what steers `name == other`-style comparisons equal,
   deliberately.
-- **Known gap: instance-valued assertions assume value equality.** A
-  path returning an interpreted instance renders
-  `eq(Klass.new(...))`, which compares by identity — and fails — when
-  Klass defines no `==`. Reader flows sidestep it by emitting only
-  plainly renderable values (scalars, ClassReferences, collections of
-  those — `Condition#plainly_renderable?`); method paths can still
-  hit it (no dogfooded project has yet). The fix is gating instance
-  renders on provable value equality, or asserting instance shape
-  differently.
+- **Instance-valued assertions are gated on provable value
+  equality** (`Condition#equality_renderable?`): `eq(Klass.new(...))`
+  compares by `==` at test runtime, so it only renders when the pair
+  provably compares equal — a Data class without its own `==` is
+  member-wise (provable when the members are), and a class defining
+  `==` is probed concolically (the evaluator interprets
+  `value == <copy of value>`; only a concrete true proves it).
+  Anything else falls to `Object#==` identity, where eq would fail: a
+  bare instance degrades to the shape assertion
+  (`be_an_instance_of`, via `Target#type_assertion`), and a container
+  of unprovable instances degrades the path to a skip.
 - **Never whitelist `hash` or `object_id`** (or anything else
   process-seeded): the host-computed value differs run to run, so the
   generated assertion would be flaky-wrong. The hash-delegation idiom

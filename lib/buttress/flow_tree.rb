@@ -3,7 +3,8 @@ module Buttress
     attr_accessor :condition, :parent
 
     extend Forwardable
-    delegate [:description, :return_value, :skip_reason] => :condition
+    delegate [:description, :return_value, :skip_reason,
+              :type_assertion_class] => :condition
     delegate [:class_name, :instance_name, :target, :method_name] => :parent
 
     def initialize(condition, parent:)

@@ -10,6 +10,10 @@
     <%= flow.instance_name %> = <%= flow.constructor_call %>
 
     <%= flow.instance_name %>.<%= flow.method_call %>
+<% elsif flow.type_assertion_class -%>
+    <%= flow.instance_name %> = <%= flow.constructor_call %>
+
+    <%= target.type_assertion("#{flow.instance_name}.#{flow.method_call}", flow.type_assertion_class) %>
 <% else -%>
     <%= flow.instance_name %> = <%= flow.constructor_call %>
 

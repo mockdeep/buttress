@@ -60,6 +60,17 @@ module Buttress
       end
     end
 
+    # An instance-shape assertion for interpreted-instance returns
+    # whose class has no provable value equality — eq would compare by
+    # identity at test runtime and fail.
+    def type_assertion(actual, class_path)
+      if legacy_rspec?
+        "#{actual}.should be_an_instance_of(#{class_path})"
+      else
+        "expect(#{actual}).to be_an_instance_of(#{class_path})"
+      end
+    end
+
     # RSpec 3 fails a pending example whose body passes, so modern targets
     # get skip; legacy RSpec predates skip, so they get pending.
     def skip(reason)
