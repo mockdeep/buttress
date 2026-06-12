@@ -29,8 +29,14 @@ module Buttress
         capitalize swapcase reverse strip lstrip rstrip chomp chop squeeze
         include? start_with? end_with? index rindex sub gsub tr delete
         count split chars succ next center ljust rjust slice
+        scan match? =~
         to_s to_i to_f to_sym inspect freeze
       ],
+      # String#match is deliberately absent: MatchData can't Marshal
+      # across the replay boundary and has no faithful source
+      # rendering. The boolean and index forms carry the same
+      # information in plain values.
+      Regexp => %i[== != nil? match? =~ source to_s inspect],
       Integer => %i[
         + - * / % ** == != < > <= >= <=> nil? abs ceil floor round truncate
         succ next pred divmod gcd lcm digits
@@ -212,6 +218,7 @@ module Buttress
         end
       when :dstr
         node.children.map { |part| call(part, env).to_s }.join
+      when :regexp then evaluate_regexp(node, env)
       when :and
         left, right = node.children
         call(left, env) && call(right, env)
@@ -283,6 +290,34 @@ module Buttress
       when :const then "#{const_path(scope)}::#{name}"
       when :cbase then "::#{name}"
       else raise CannotEvaluate, source(node)
+      end
+    end
+
+    # Flags whose matching semantics are stable across target versions.
+    # The rest (o, and the encoding flags n/u/e/s) either depend on
+    # interpolation timing or pre-1.9 encoding behavior, so they
+    # degrade.
+    REGEXP_OPTIONS = {
+      i: Regexp::IGNORECASE, m: Regexp::MULTILINE, x: Regexp::EXTENDED,
+    }.freeze
+
+    # A regexp literal: parts evaluate like dstr parts (an unevaluable
+    # interpolation degrades), flags map to host options. A pattern the
+    # host can't compile — a target-dialect corner — degrades too.
+    def evaluate_regexp(node, env)
+      *parts, options = node.children
+      source = parts.map { |part| call(part, env).to_s }.join
+      Regexp.new(source, regexp_flags(options, node))
+    rescue RegexpError
+      raise CannotEvaluate, source(node)
+    end
+
+    def regexp_flags(options, node)
+      options.children.reduce(0) do |flags, name|
+        flag = REGEXP_OPTIONS[name]
+        raise CannotEvaluate, source(node) unless flag
+
+        flags | flag
       end
     end
 

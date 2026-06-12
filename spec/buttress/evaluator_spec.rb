@@ -142,6 +142,25 @@ RSpec.describe Buttress::Evaluator do
       .to raise_error(Buttress::CannotEvaluate, /Array#cycle with a block/)
   end
 
+  it 'evaluates regexp literals and the methods that take them' do
+    expect(call(expr('"go to https://x.io now".scan(%r{https?://\S+})')))
+      .to eq(['https://x.io'])
+    expect(call(expr('"ABC" =~ /b/i'))).to eq(1)
+    expect(call(expr('/b/.match?("abc")'))).to eq(true)
+    expect(call(expr('"a-b".split(/-/)'))).to eq(%w[a b])
+  end
+
+  it 'evaluates interpolated regexps when the parts evaluate' do
+    expect(call(expr('"abc" =~ /#{"b"}c/'))).to eq(1)
+    expect { call(expr('"x" =~ /#{boom}/')) }
+      .to raise_error(Buttress::CannotEvaluate, /boom/)
+  end
+
+  it 'degrades regexp flags without stable semantics' do
+    expect { call(expr('"x".scan(/y/o)')) }
+      .to raise_error(Buttress::CannotEvaluate, %r{/y/o})
+  end
+
   it 'evaluates the map.with_index idiom' do
     node = expr('["a", "b"].map.with_index { |x, i| "#{i}#{x}" }')
 

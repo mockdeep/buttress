@@ -1989,4 +1989,30 @@ RSpec.describe Buttress::Composer, '#call' do
 
     expect(described_class.call(code, 'MyClass', 'icon')).to eq(expected_tests)
   end
+
+  it 'evaluates regexp literals in return values' do
+    code = <<~'RUBY'
+      class MyClass
+        def initialize(name)
+          @name = name
+        end
+
+        def links
+          "see https://example.com/docs and #{@name}".scan(%r{https?://\S+})
+        end
+      end
+    RUBY
+
+    expected_tests = <<~'RUBY'
+      RSpec.describe MyClass, '#links' do
+        it 'returns "see https://example.com/docs and #{@name}".scan(%r{https?://\S+})' do
+          my_class = MyClass.new('blah1')
+
+          expect(my_class.links).to eq(["https://example.com/docs"])
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'links')).to eq(expected_tests)
+  end
 end
