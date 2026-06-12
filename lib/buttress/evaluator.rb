@@ -251,10 +251,25 @@ module Buttress
       when :array
         node.children.map { |child| call(child, env) }
       when :hash
-        node.children.to_h do |pair|
-          raise CannotEvaluate, source(node) unless pair.type == :pair
-
-          [call(pair.children.first, env), call(pair.children.last, env)]
+        node.children.each_with_object({}) do |pair, hash|
+          case pair.type
+          when :pair
+            hash[call(pair.children.first, env)] =
+              call(pair.children.last, env)
+          when :kwsplat
+            # **value: a concrete Hash merges with Ruby's later-wins
+            # semantics. Anything else degrades, carrying the value so
+            # the repair search can trace which input it came from.
+            value = call(pair.children.first, env)
+            unless value.is_a?(Hash)
+              error = CannotEvaluate.new("#{value.class}#to_hash")
+              error.receiver = value
+              raise error
+            end
+            hash.merge!(value)
+          else
+            raise CannotEvaluate, source(node)
+          end
         end
       when :dstr
         node.children.map { |part| call(part, env).to_s }.join
@@ -768,6 +783,11 @@ module Buttress
       result = host_type_query(receiver, operator, args)
       return result unless result.equal?(MISSING)
 
+      if receiver.is_a?(Array) && PATTERN_QUERIES.include?(operator) &&
+         args.size == 1 && args.first.is_a?(ClassReference)
+        return pattern_query(receiver, operator, args.first)
+      end
+
       result = interpreted_core(receiver, operator, args)
       return result unless result.equal?(MISSING)
 
@@ -795,6 +815,52 @@ module Buttress
       end
 
       CycleValue.new(receiver)
+    end
+
+    PATTERN_QUERIES = %i[all? any? none?].freeze
+
+    # Enumerable#all?/any?/none? with a class-pattern argument: the
+    # host can't answer it (=== against a ClassReference falls to
+    # identity), so each element is answered by the type oracle —
+    # provably, or the whole query degrades. The walk counts as trace
+    # iterations, and an empty receiver is the same vacuity signal a
+    # block walk gives, so enrichment can fire on pattern-guarded
+    # collections (Card#build_checklists' all?(Checklist) idiom).
+    def pattern_query(receiver, operator, ref)
+      if resolve_class(ref.path)&.lookup_singleton_method(:===)
+        # A project class defining its own === changes pattern
+        # semantics; treating it as is_a? would be a guess.
+        raise cannot_send(receiver, operator)
+      end
+
+      @trace.vacuous! if receiver.empty?
+      answers = receiver.map do |element|
+        @trace.iteration!
+        element_is_a?(element, ref)
+      end
+      raise cannot_send(receiver, operator) if
+        answers.any? { |answer| answer.equal?(MISSING) }
+
+      case operator
+      when :all? then answers.all?
+      when :any? then answers.any?
+      when :none? then answers.none?
+      end
+    end
+
+    def element_is_a?(element, ref)
+      case element
+      when InstanceValue
+        begin
+          invoke_on_instance(element, :is_a?, [ref], [])
+        rescue CannotEvaluate
+          MISSING
+        end
+      when ClassReference
+        MISSING
+      else
+        host_is_a?(element, :is_a?, ref.path)
+      end
     end
 
     def cannot_send(receiver, operator, suffix = '')

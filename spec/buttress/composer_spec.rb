@@ -2730,6 +2730,83 @@ RSpec.describe Buttress::Composer, '#call' do
     expect(described_class.call(code, 'Box', 'labels')).to eq(expected_tests)
   end
 
+  it 'enriches a from_data world with raw constructor-keyword hashes' do
+    code = <<~RUBY
+      Item = Data.define(:card_id, :id, :name, :pos)
+
+      class Item
+        def initialize(card_id:, id:, name:, pos:, **_data)
+          super(card_id:, id:, name:, pos:)
+        end
+
+        def self.from_data(items_data, card_id:)
+          items_data.map { |item_data| new(card_id:, **item_data) }
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe Item, '.from_data' do
+        it 'returns items_data.map { |item_data| new(card_id:, **item_data) }' do
+          expect(Item.from_data([{card_id: "blah1", id: "blah2", name: "blah3", pos: "blah4"}], card_id: 'blah7')).to eq([Item.new(card_id: 'blah1', id: 'blah2', name: 'blah3', pos: 'blah4')])
+        end
+      end
+    RUBY
+
+    result = described_class.call(code, 'Item', 'from_data', singleton: true)
+    expect(result).to eq(expected_tests)
+  end
+
+  it 'answers class-pattern queries from the type oracle' do
+    code = <<~RUBY
+      Item = Data.define(:card_id, :id, :name, :pos)
+
+      class Item
+        def initialize(card_id:, id:, name:, pos:, **_data)
+          super(card_id:, id:, name:, pos:)
+        end
+
+        def self.from_data(items_data, card_id:)
+          items_data.map { |item_data| new(card_id:, **item_data) }
+        end
+      end
+
+      Card = Data.define(:id, :items)
+
+      class Card
+        def initialize(id:, items:, **_data)
+          super(id:, items: build_items(items, card_id: id))
+        end
+
+        private
+
+        def build_items(items, card_id:)
+          return items if items.all?(Item)
+
+          Item.from_data(items, card_id:)
+        end
+      end
+    RUBY
+
+    # items.all?(Item) is answered per element by the type oracle (a
+    # raw hash provably is not an Item), the kwsplat constructs, and
+    # the reader asserts the constructed instances — the world where
+    # build_items actually transforms its input.
+    expected_tests = <<~RUBY
+      RSpec.describe Card do
+        describe '#items' do
+          it 'returns @items' do
+            card = Card.new(id: 'blah1', items: [{card_id: "blah1", id: "blah2", name: "blah3", pos: "blah4"}])
+
+            expect(card.items).to eq([Item.new(card_id: 'blah1', id: 'blah2', name: 'blah3', pos: 'blah4')])
+          end
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'Card')).to eq(expected_tests)
+  end
+
   it 'refuses a class spec when every flow filters away' do
     code = <<~RUBY
       MyClass = Data.define(:id, :name)

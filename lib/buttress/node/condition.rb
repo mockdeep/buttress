@@ -537,23 +537,43 @@ class Condition
   end
 
   def enriched?(value)
-    value.is_a?(Array) &&
-      value.any? { |element| element.is_a?(Buttress::InstanceValue) }
+    value.is_a?(Array) && value.any? do |element|
+      element.is_a?(Buttress::InstanceValue) || element.is_a?(Hash)
+    end
   end
 
   # Synthesized one-element collections for a slot, drawn from project
-  # classes whose name echoes the slot's: the plain default-input
-  # instance, and a variant with its own collection-named inputs
-  # emptied (a Card whose checklists: [] constructs even when the
-  # default string would not).
+  # classes whose name echoes the slot's: a raw constructor-keyword
+  # hash first (the kwsplat-into-new idiom consumes element hashes,
+  # not instances — and a consumer that wants instances rejects the
+  # hash at replay), then the plain default-input instance, then a
+  # variant with its own collection-named inputs emptied (a Card whose
+  # checklists: [] constructs even when the default string would not).
   def enrichment_values(name)
     candidate_class_paths
       .select { |path| name_echoes?(name, path) }
       .flat_map do |path|
-        [foreign_instance(path), emptied_collections_instance(path)]
+        [constructor_keyword_hash(path),
+         foreign_instance(path),
+         emptied_collections_instance(path)]
       end
       .compact
       .map { |instance| [instance] }
+  end
+
+  # The raw-data shape of a class: its required constructor keywords
+  # with generated defaults, as the element hash a from_data-style
+  # `new(**data)` consumes. nil when initialize takes required
+  # positionals (a splat can't carry those) or no required keywords.
+  def constructor_keyword_hash(path)
+    init = resolve_foreign_class(path)&.lookup_method(:initialize)
+    return nil unless init
+    return nil if init.args.any? { |param| param.type == :arg }
+
+    keywords = init.args.select { |param| param.type == :kwarg }
+    return nil if keywords.empty?
+
+    keywords.to_h { |param| [param.name, param.value] }
   end
 
   def candidate_class_paths
@@ -824,8 +844,10 @@ class Condition
     path && name_echoes?(name, path) ? 1 : 0
   end
 
+  # Underscores are stripped so snake_case input names match CamelCase
+  # class basenames (checklist_items_data ~ ChecklistItem).
   def name_echoes?(name, path)
-    stem = name.to_s.downcase
+    stem = name.to_s.downcase.delete('_')
     path.downcase.split('::').any? do |segment|
       segment.start_with?(stem) || stem.start_with?(segment)
     end
