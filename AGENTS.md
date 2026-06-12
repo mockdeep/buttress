@@ -88,7 +88,17 @@ list, never overwritten.
 
 The CLI takes `'ClassName#method'` for one method (rendered with
 `spec.erb`) or bare `'ClassName'` for every public instance method
-(nested describes via `class_spec.erb`).
+(nested describes via `class_spec.erb`). Both also cover macro
+readers (Data members and attr macros, unshadowed —
+`ClassNode#public_reader_names`): `FlowTree` synthesizes the ivar-read
+def the macro defines and the standard pipeline solves and renders
+it, so a reader asserts the value the constructor actually computed
+(defaulted keywords, derived members). Reader flows are *filtered*,
+never skipped (`Condition#informative_reader?`): a reader is not a
+source path, so one whose world can't solve, whose value just echoes
+the constructor input passed under the same name, or whose value
+doesn't render safely under `eq` (interpreted instances — see the
+value-equality gap below) simply gets no test.
 
 - `PathEnumerator` walks a method body into `Path`s, splitting `if`/
   `unless`/ternary/`case`/`&&`/`||` by short-circuit semantics. Each
@@ -285,6 +295,15 @@ diff branch and compare assertions instead.
   move (each scalar slot also offers its sibling slots' current
   values) is what steers `name == other`-style comparisons equal,
   deliberately.
+- **Known gap: instance-valued assertions assume value equality.** A
+  path returning an interpreted instance renders
+  `eq(Klass.new(...))`, which compares by identity — and fails — when
+  Klass defines no `==`. Reader flows sidestep it by emitting only
+  plainly renderable values (scalars, ClassReferences, collections of
+  those — `Condition#plainly_renderable?`); method paths can still
+  hit it (no dogfooded project has yet). The fix is gating instance
+  renders on provable value equality, or asserting instance shape
+  differently.
 - **Never whitelist `hash` or `object_id`** (or anything else
   process-seeded): the host-computed value differs run to run, so the
   generated assertion would be flaky-wrong. The hash-delegation idiom

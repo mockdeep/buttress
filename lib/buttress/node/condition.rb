@@ -116,6 +116,19 @@ class Condition
     [self] + outcome_variants
   end
 
+  # Whether a synthesized reader path is worth emitting: the world
+  # solved, the value renders safely under eq (no interpreted
+  # instances — their classes may not define value equality, so the
+  # rendered constructor call could compare by identity and fail), and
+  # the member doesn't just echo the constructor input passed under
+  # the same name (true, but trivial).
+  def informative_reader?
+    return false if skip_reason
+
+    value = solved.return_value
+    plainly_renderable?(value) && !echoes_input?(value)
+  end
+
   protected
 
   # Locks a copy of this condition to one found world: rendering reads
@@ -370,6 +383,42 @@ class Condition
 
   def same_class?(instance)
     instance.class_path == (class_name || class_node.name)
+  end
+
+  # Value classes whose rendered literal compares by value at test
+  # runtime (ClassReference renders as the constant, where eq is class
+  # identity — also sound).
+  PLAIN_RENDERABLE = [
+    NilClass, TrueClass, FalseClass, String, Symbol, Integer, Float,
+    Buttress::ClassReference
+  ].freeze
+
+  def plainly_renderable?(value)
+    case value
+    when Array
+      value.all? { |element| plainly_renderable?(element) }
+    when Hash
+      value.all? do |key, element|
+        plainly_renderable?(key) && plainly_renderable?(element)
+      end
+    else
+      PLAIN_RENDERABLE.any? { |klass| value.is_a?(klass) }
+    end
+  end
+
+  # Whether the value is exactly what the rendered constructor call
+  # passes under this member's name.
+  def echoes_input?(value)
+    member = method_node.name.to_sym
+    passed = passed_constructor_inputs
+    passed.key?(member) && passed[member] == value
+  end
+
+  def passed_constructor_inputs
+    names = constructor_params
+      .select { |param| param.type == :arg }
+      .map(&:name)
+    names.zip(constructor_values).to_h.merge(constructor_keywords)
   end
 
   def enrichment_slots(best)

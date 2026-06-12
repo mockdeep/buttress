@@ -132,6 +132,16 @@ class ClassNode < BaseNode
     readable
   end
 
+  # Names of publicly readable macro readers (Data members and attr
+  # macros, unshadowed by a def), in declaration order. They have no
+  # body to enumerate paths through, but their post-initialize values
+  # are still testable — FlowTree synthesizes the ivar-read def.
+  def public_reader_names
+    (data_members + attr_readers).uniq.select do |name|
+      publicly_readable?(name)
+    end
+  end
+
   def attr_writers
     attr_names(:writer)
   end

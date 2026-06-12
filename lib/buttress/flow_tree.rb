@@ -70,12 +70,15 @@ module Buttress
     end
 
     def flows
-      conditions = method_node.conditions(
-        schema, sources: sources, class_name: class_name, target: target,
-      )
-      conditions
-        .flat_map(&:variants)
-        .map { |condition| Flow.new(condition, parent: self) }
+      @flows ||= begin
+        conditions = method_node.conditions(
+          schema, sources: sources, class_name: class_name, target: target,
+        )
+        conditions = conditions.select(&:informative_reader?) if reader?
+        conditions
+          .flat_map(&:variants)
+          .map { |condition| Flow.new(condition, parent: self) }
+      end
     end
 
     def class_node
@@ -83,7 +86,33 @@ module Buttress
     end
 
     def method_node
-      @method_node ||= class_node.find_method(method_name)
+      @method_node ||= class_node.lookup_method(method_name) ||
+        reader_method_node ||
+        raise(Buttress::Error, "method not found: ##{method_name}")
+    end
+
+    private
+
+    def reader?
+      method_node
+      @reader == true
+    end
+
+    # Macro readers (Data members, attr_reader) have no def to analyze,
+    # but their post-initialize values are still testable: synthesize
+    # the ivar read the macro defines and let the standard pipeline
+    # solve and render it. Reader conditions are filtered rather than
+    # skipped (see Condition#informative_reader?) — a reader is not a
+    # source path, so an unemittable one gets no test, never a
+    # skeleton.
+    def reader_method_node
+      return nil unless class_node.publicly_readable?(method_name.to_sym)
+
+      @reader = true
+      MethodNode.new(
+        target.parse("def #{method_name}\n  @#{method_name}\nend"),
+        parent_node: class_node,
+      )
     end
   end
 end

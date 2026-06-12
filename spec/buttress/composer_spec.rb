@@ -2286,4 +2286,40 @@ RSpec.describe Buttress::Composer, '#call' do
 
     expect(described_class.call(code, 'MyClass', 'checked?')).to eq(expected_tests)
   end
+
+  it 'generates tests for computed member readers, dropping echoes' do
+    code = <<~RUBY
+      class MyClass
+        attr_reader :name, :label, :count
+
+        def initialize(name, count: 0)
+          @name = name
+          @label = name.upcase
+          @count = count
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe MyClass do
+        describe '#label' do
+          it 'returns @label' do
+            my_class = MyClass.new('blah1')
+
+            expect(my_class.label).to eq('BLAH1')
+          end
+        end
+
+        describe '#count' do
+          it 'returns @count' do
+            my_class = MyClass.new('blah1')
+
+            expect(my_class.count).to eq(0)
+          end
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass')).to eq(expected_tests)
+  end
 end

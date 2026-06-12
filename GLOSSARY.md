@@ -244,6 +244,14 @@ name at the moment they're needed.
   inputs were found that steer the branches the right way (a solver
   gap, not proof the branch is unreachable); "cannot yet evaluate"
   means the interpreter hit something it doesn't cover yet.
+- **reader flow** — a test for a macro reader (a Data member or
+  attr_reader, which has no method body to walk). `FlowTree`
+  synthesizes the ivar-read def the macro defines and the standard
+  pipeline solves it, so the test asserts the value the constructor
+  actually computed (a defaulted keyword, a derived member). Reader
+  flows are filtered rather than skipped: an unsolvable, echoing, or
+  unsafely-renderable one gets no test — a reader is not a source
+  path.
 - **Flow / FlowTree** — what the templates see
   (`lib/buttress/flow_tree.rb`). A `Flow` wraps a `Condition` with
   rendering helpers (`method_call`, `constructor_call`), and the
