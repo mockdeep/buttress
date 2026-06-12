@@ -543,17 +543,22 @@ class Condition
   end
 
   # Synthesized one-element collections for a slot, drawn from project
-  # classes whose name echoes the slot's: a raw constructor-keyword
-  # hash first (the kwsplat-into-new idiom consumes element hashes,
-  # not instances — and a consumer that wants instances rejects the
-  # hash at replay), then the plain default-input instance, then a
-  # variant with its own collection-named inputs emptied (a Card whose
-  # checklists: [] constructs even when the default string would not).
+  # classes whose name echoes the slot's, richest candidate first —
+  # the hill-climb keeps the first improving world, and the replay
+  # oracle rejects any candidate that breaks a path's polarity or
+  # can't construct. Order: the deep raw-data hash (the kwsplat-into-
+  # new idiom consumes element hashes, recursively filled so nested
+  # collections walk too), the filled instance (collection inputs hold
+  # nested element data — what an instance-wanting consumer needs for
+  # its own blocks to run), the plain default-input instance, and the
+  # emptied variant (a Card whose checklists: [] constructs even when
+  # the default string would not).
   def enrichment_values(name)
     candidate_class_paths
       .select { |path| name_echoes?(name, path) }
       .flat_map do |path|
         [constructor_keyword_hash(path),
+         filled_collections_instance(path),
          foreign_instance(path),
          emptied_collections_instance(path)]
       end
@@ -561,19 +566,126 @@ class Condition
       .map { |instance| [instance] }
   end
 
+  # How many constructor levels deep filled synthesis descends
+  # (cards -> checklists -> items is three).
+  FILL_DEPTH = 3
+
   # The raw-data shape of a class: its required constructor keywords
-  # with generated defaults, as the element hash a from_data-style
-  # `new(**data)` consumes. nil when initialize takes required
-  # positionals (a splat can't carry those) or no required keywords.
-  def constructor_keyword_hash(path)
-    init = resolve_foreign_class(path)&.lookup_method(:initialize)
+  # with generated defaults — and, while depth lasts, each keyword
+  # slot with a resolvable element class (by name affinity or consumer
+  # hint) filled with a one-element array of that class's own deep
+  # hash, so the constructed graph's nested collections are non-empty.
+  # Optional keywords are included only when filled: an unfillable
+  # kwoptarg keeps its declared default. nil when initialize takes
+  # required positionals (a splat can't carry those) or no required
+  # keywords.
+  def constructor_keyword_hash(path, depth: FILL_DEPTH, seen: [])
+    foreign = resolve_foreign_class(path)
+    init = foreign&.lookup_method(:initialize)
     return nil unless init
     return nil if init.args.any? { |param| param.type == :arg }
+    return nil if init.args.none? { |param| param.type == :kwarg }
 
-    keywords = init.args.select { |param| param.type == :kwarg }
-    return nil if keywords.empty?
+    init.args
+      .select { |param| %i[kwarg kwoptarg].include?(param.type) }
+      .each_with_object({}) do |param, hash|
+        filled = filled_element(foreign, param, depth, seen + [path])
+        if filled
+          hash[param.name] = [filled]
+        elsif param.type == :kwarg
+          hash[param.name] = param.value
+        end
+      end
+  end
 
-    keywords.to_h { |param| [param.name, param.value] }
+  # The nested element for a constructor slot, when one resolves: the
+  # deep hash of the slot's element class. Only collection-shaped
+  # (plural-named) slots fill — card_id would otherwise affinity-match
+  # Card and grow a graph inside a scalar foreign key. Depth and a
+  # seen-set bound the recursion (Card -> Checklist -> Card would
+  # otherwise cycle).
+  def filled_element(owner, param, depth, seen)
+    return nil unless depth.positive?
+    return nil unless param.name.to_s.end_with?('s')
+
+    element_class_for(owner, param.name)
+      .reject { |path| seen.include?(path) }
+      .filter_map do |path|
+        constructor_keyword_hash(path, depth: depth - 1, seen: seen)
+      end
+      .first
+  end
+
+  # Project classes that could be the slot's element: name affinity
+  # (checklists ~ Checklist), plus consumer hints — classes the
+  # owner's initialize passes the parameter to (check_items flowing
+  # into ChecklistItem.from_data names the element class at the call
+  # site, where affinity cannot).
+  def element_class_for(owner, param_name)
+    affinity = candidate_class_paths.select do |path|
+      name_echoes?(param_name, path)
+    end
+    affinity + consumer_hint_paths(owner, param_name)
+  end
+
+  # Constant paths receiving the named parameter as an argument
+  # anywhere in the owner's initialize body.
+  def consumer_hint_paths(owner, param_name)
+    init = owner.lookup_method(:initialize)
+    return [] unless init
+
+    hints = []
+    collect_consumer_hints(init.children.last, param_name, hints)
+    hints.uniq
+  end
+
+  def collect_consumer_hints(node, param_name, hints)
+    return unless node.is_a?(Parser::AST::Node)
+
+    if node.type == :send
+      receiver, _name, *args = node.children
+      passes_param = args.any? do |arg|
+        arg.is_a?(Parser::AST::Node) && arg.type == :lvar &&
+          arg.children.first == param_name
+      end
+      if passes_param && receiver.is_a?(Parser::AST::Node) &&
+         receiver.type == :const
+        hints << const_path_of(receiver)
+      end
+    end
+
+    node.children.each do |child|
+      collect_consumer_hints(child, param_name, hints)
+    end
+  end
+
+  def const_path_of(node)
+    scope, name = node.children
+    if scope.is_a?(Parser::AST::Node) && scope.type == :const
+      "#{const_path_of(scope)}::#{name}"
+    else
+      name.to_s
+    end
+  end
+
+  # A synthesized instance whose collection inputs hold nested element
+  # data — the variant an instance-wanting consumer needs for its own
+  # blocks to run (a Card whose checklists actually contain an
+  # unchecked item, three levels down).
+  def filled_collections_instance(path)
+    foreign = resolve_foreign_class(path)
+    init = foreign&.lookup_method(:initialize)
+    return nil unless init
+
+    overrides = init.args
+      .select { |param| %i[arg kwarg kwoptarg].include?(param.type) }
+      .each_with_object({}) do |param, hash|
+        filled = filled_element(foreign, param, FILL_DEPTH, [path])
+        hash[param.name] = [filled] if filled
+      end
+    return nil if overrides.empty?
+
+    foreign_instance(path, overrides)
   end
 
   def candidate_class_paths
@@ -778,7 +890,10 @@ class Condition
       .select { |param| param.type == :arg }
       .map { |param| overrides.fetch(param.name, param.value) }
     keywords = init.args
-      .select { |param| param.type == :kwarg }
+      .select do |param|
+        param.type == :kwarg ||
+          (param.type == :kwoptarg && overrides.key?(param.name))
+      end
       .to_h { |param| [param.name, overrides.fetch(param.name, param.value)] }
     evaluator = Buttress::Evaluator.new(
       class_node: foreign, sources: sources, class_path: path, target: target,

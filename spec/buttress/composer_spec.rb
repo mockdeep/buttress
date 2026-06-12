@@ -2807,6 +2807,56 @@ RSpec.describe Buttress::Composer, '#call' do
     expect(described_class.call(code, 'Card')).to eq(expected_tests)
   end
 
+  it 'fills nested collections through consumer hints' do
+    code = <<~RUBY
+      Coin = Data.define(:bag_id, :value)
+
+      class Coin
+        def initialize(bag_id:, value:, **_data)
+          super(bag_id:, value:)
+        end
+
+        def self.from_data(rows, bag_id:)
+          rows.map { |row| new(bag_id:, **row) }
+        end
+      end
+
+      Pocket = Data.define(:id, :coins)
+
+      class Pocket
+        def initialize(id:, loose_coins: [], **_data)
+          super(id:, coins: Coin.from_data(loose_coins, bag_id: id))
+        end
+      end
+
+      class Bag
+        def initialize(pockets)
+          @pockets = pockets
+        end
+
+        def values
+          @pockets.flat_map(&:coins).map(&:value)
+        end
+      end
+    RUBY
+
+    # pockets -> Pocket resolves by name affinity, but loose_coins ->
+    # Coin only resolves because Pocket's initialize passes it to
+    # Coin.from_data — the consumer names the element class at the
+    # call site. The filled three-level graph makes both walks run.
+    expected_tests = <<~RUBY
+      RSpec.describe Bag, '#values' do
+        it 'returns @pockets.flat_map(&:coins).map(&:value)' do
+          bag = Bag.new([Pocket.new(id: 'blah1', loose_coins: [{bag_id: "blah1", value: "blah2"}])])
+
+          expect(bag.values).to eq(["blah2"])
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'Bag', 'values')).to eq(expected_tests)
+  end
+
   it 'refuses a class spec when every flow filters away' do
     code = <<~RUBY
       MyClass = Data.define(:id, :name)

@@ -272,7 +272,7 @@ module Buttress
           end
         end
       when :dstr
-        node.children.map { |part| call(part, env).to_s }.join
+        node.children.map { |part| stringify(call(part, env)) }.join
       when :regexp then evaluate_regexp(node, env)
       when :and
         left, right = node.children
@@ -348,6 +348,24 @@ module Buttress
       end
     end
 
+    # Interpolation calls to_s. A symbolic value must answer it by
+    # interpretation: an interpreted instance dispatches to its class's
+    # own to_s (the host's would bake "#<Buttress::InstanceValue:...>"
+    # into the assertion), and a class reference stringifies to its
+    # constant path, which is what Class#to_s returns. A class without
+    # its own to_s degrades — Object#to_s embeds a process-seeded
+    # address no generated assertion could match.
+    def stringify(value)
+      case value
+      when InstanceValue, CycleValue
+        send_to(value, :to_s, [])
+      when ClassReference
+        value.path
+      else
+        value.to_s
+      end
+    end
+
     # Flags whose matching semantics are stable across target versions.
     # The rest (o, and the encoding flags n/u/e/s) either depend on
     # interpolation timing or pre-1.9 encoding behavior, so they
@@ -361,7 +379,7 @@ module Buttress
     # host can't compile — a target-dialect corner — degrades too.
     def evaluate_regexp(node, env)
       *parts, options = node.children
-      source = parts.map { |part| call(part, env).to_s }.join
+      source = parts.map { |part| stringify(call(part, env)) }.join
       Regexp.new(source, regexp_flags(options, node))
     rescue RegexpError
       raise CannotEvaluate, source(node)
@@ -568,11 +586,27 @@ module Buttress
       # A walk that never ran its block over an empty collection is the
       # vacuity signal; zero runs over a non-empty receiver (a find
       # with no match, a fetch on a present key) is not enrichable.
-      if ran.zero? && (receiver.is_a?(Array) || receiver.is_a?(Hash)) &&
-         receiver.empty?
-        @trace.vacuous!
-      end
+      @trace.vacuous! if ran.zero? && empty_walk?(receiver)
       result
+    end
+
+    # Emptiness of a block walk's receiver. Enumerators count: the
+    # blockless-map chain ([].map.with_index { ... }) walks the same
+    # empty collection, just wrapped — without this, a world that
+    # should enrich reports non-vacuous and the climb stops early.
+    def empty_walk?(receiver)
+      case receiver
+      when Array, Hash
+        receiver.empty?
+      when Enumerator
+        begin
+          receiver.size&.zero? || false
+        rescue StandardError
+          false
+        end
+      else
+        false
+      end
     end
 
     def block_param_names(node, params_node)
