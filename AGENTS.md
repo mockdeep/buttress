@@ -1,5 +1,8 @@
 # AGENTS.md
 
+Terminology used throughout this file (paths, worlds, the search tiers,
+symbolic values, the skip table) is defined in `GLOSSARY.md`.
+
 Buttress statically analyzes Ruby code and generates deterministic RSpec
 tests from control-flow analysis: one test per execution path through a
 method (plus outcome variants when a path's return value has an
@@ -101,7 +104,7 @@ The CLI takes `'ClassName#method'` for one method (rendered with
   the environment at its branch point, and computing the path's return
   value. When the default-input replay takes a branch the wrong way, a
   tier-2 search retries with mutated inputs — constructor candidates
-  harvested from literals the class compares against, crossed with
+  seeded from literals the class compares against, crossed with
   argument-type alternatives (a synthesized `other` instance vs the
   plain string default), budget-capped. When the replay *cannot
   evaluate* — a default doesn't answer a method the path needs — a
@@ -119,7 +122,7 @@ The CLI takes `'ClassName#method'` for one method (rendered with
   `CannotEvaluate` carries its receiver and generated defaults are
   unique per parameter, so the failing value names the input it came
   from; the search is depth-first, affinity-ranked (`filter:` prefers
-  `Filters::*`), and shares the attempt budget. The replay is the
+  `Filters::*`), and shares the search budget. The replay is the
   oracle, so a found assignment is verified by construction.
   Finally, a *satisfied* world can still be degenerate — the
   evaluator's `Trace` records block iterations, and a world whose
@@ -137,7 +140,7 @@ The CLI takes `'ClassName#method'` for one method (rendered with
   (-1/0/1 for `<=>`, true/false otherwise), so each uncovered
   outcome gets its own one-swap search over the same slots — scalar
   neighbors ('' sorts below any generated default, a suffixed copy
-  above; harvested comparison literals cover equality with specific
+  above; seeded comparison literals cover equality with specific
   values), one-input rebuilds of a synthesized instance, and the
   plain default in place of an instance (a core value provably fails
   `is_a?` against a project class) — and each world found renders as

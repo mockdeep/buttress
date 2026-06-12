@@ -2,11 +2,10 @@
 # argument values that steer execution down the path, the call that
 # exercises it, and the value it returns.
 class Condition
-  # Total candidate constructor assignments the tier-2 search may try
-  # for one path.
-  ATTEMPT_BUDGET = 100
+  # Total candidate worlds the tier searches may try for one path.
+  SEARCH_BUDGET = 100
 
-  # Literal node types harvested as candidate values.
+  # Literal node types collected as seed values.
   LITERAL_TYPES = %i[str sym int].freeze
 
   # A coherent solved world for one path: the constructor inputs, the
@@ -141,7 +140,7 @@ class Condition
 
   # The solved world for this path, or the error explaining why none
   # exists. Default inputs are tried first; when the replay fails on a
-  # branch, the tier-2 search tries harvested constructor inputs. The
+  # branch, the tier-2 search tries seeded constructor inputs. The
   # replay itself is the oracle, so any found assignment is verified by
   # construction.
   def solution
@@ -189,7 +188,7 @@ class Condition
 
   def enrichment_step(best)
     enrichment_candidates(best).each do |positional, keywords, bindings|
-      return nil if @search_attempts >= ATTEMPT_BUDGET
+      return nil if @search_attempts >= SEARCH_BUDGET
 
       @search_attempts += 1
       begin
@@ -267,7 +266,7 @@ class Condition
   # outcome.
   def outcome_variant(target)
     outcome_candidates(solved).each do |positional, keywords, bindings|
-      return nil if @search_attempts >= ATTEMPT_BUDGET
+      return nil if @search_attempts >= SEARCH_BUDGET
 
       @search_attempts += 1
       begin
@@ -314,10 +313,10 @@ class Condition
   def scalar_neighbors(current)
     case current
     when String
-      (['', "#{current}x"] + comparison_literals.grep(String) - [current])
+      (['', "#{current}x"] + seed_literals.grep(String) - [current])
         .uniq
     when Integer
-      ([current - 1, current + 1] + comparison_literals.grep(Integer) -
+      ([current - 1, current + 1] + seed_literals.grep(Integer) -
         [current]).uniq
     else
       []
@@ -468,7 +467,7 @@ class Condition
     expansions(constructor_overrides, binding_overrides, failure)
       .each do |ctor, bindings|
       next if @search_seen.include?([ctor, bindings])
-      return nil if @search_attempts >= ATTEMPT_BUDGET
+      return nil if @search_attempts >= SEARCH_BUDGET
 
       @search_seen << [ctor, bindings]
       @search_attempts += 1
@@ -675,7 +674,7 @@ class Condition
     constructor_options = [{}] + candidate_overrides
     binding_options = [{}] + binding_alternatives
     constructor_options.product(binding_options).drop(1)
-      .first(ATTEMPT_BUDGET)
+      .first(SEARCH_BUDGET)
   end
 
   # A synthesized `other` instance may steer type-guard branches the
@@ -694,7 +693,7 @@ class Condition
     params = constructor_params
       .select { |param| %i[arg kwarg].include?(param.type) }
       .map(&:name)
-    values = comparison_literals
+    values = seed_literals
     return [] if params.empty? || values.empty?
 
     singles = params.flat_map do |name|
@@ -705,29 +704,29 @@ class Condition
         { first => first_value, second => second_value }
       end
     end
-    (singles + pairs).first(ATTEMPT_BUDGET)
+    (singles + pairs).first(SEARCH_BUDGET)
   end
 
   # String-content predicates whose literal argument is itself a value
-  # satisfying them: "@".start_with?("@"), "x".include?("x"). Harvested
-  # so inputs flowing into content checks (split words, substrings)
-  # have a candidate that steers the check true.
+  # satisfying them: "@".start_with?("@"), "x".include?("x"). Collected
+  # as seeds so inputs flowing into content checks (split words,
+  # substrings) have a candidate that steers the check true.
   CONTENT_PREDICATES = %i[start_with? end_with? include?].freeze
 
-  # Literal values the class's own code compares against — the
-  # candidate pool for steering instance-state predicates.
-  def comparison_literals
-    harvest_literals(class_node.raw_node).uniq
+  # Constant seeding: literal values the class's own code compares
+  # against — the candidate pool for steering instance-state predicates.
+  def seed_literals
+    collect_seed_literals(class_node.raw_node).uniq
   end
 
-  def harvest_literals(node, found = [])
+  def collect_seed_literals(node, found = [])
     return found unless node.is_a?(Parser::AST::Node)
 
     comparison_operands(node).each do |operand|
       found << operand.children.last if LITERAL_TYPES.include?(operand.type)
     end
 
-    node.children.each { |child| harvest_literals(child, found) }
+    node.children.each { |child| collect_seed_literals(child, found) }
     found
   end
 
