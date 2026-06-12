@@ -2857,6 +2857,50 @@ RSpec.describe Buttress::Composer, '#call' do
     expect(described_class.call(code, 'Bag', 'values')).to eq(expected_tests)
   end
 
+  it 'cross-pollinates an input from an observed membership miss' do
+    code = <<~RUBY
+      Label = Data.define(:id, :name)
+
+      class Label
+        def initialize(id:, name:, **_data)
+          super(id:, name:)
+        end
+
+        def words
+          name.split(' ')
+        end
+      end
+
+      class Picker
+        attr_reader :word
+
+        def initialize(word)
+          @word = word
+        end
+
+        def call(labels)
+          labels.select { |label| label.words.include?(word) }
+        end
+      end
+    RUBY
+
+    # words derives from a scan of another input, so no mutation of
+    # word alone could match it — but the replay observed
+    # ["blah2"].include?("blah1") come up false, and the collection's
+    # member is exactly the value that makes the comparison hold.
+    expected_tests = <<~RUBY
+      RSpec.describe Picker, '#call' do
+        it 'returns labels.select { |label| label.words.include?(word) }' do
+          picker = Picker.new('blah2')
+
+          expect(picker.call([Label.new(id: 'blah1', name: 'blah2')])).to eq([Label.new(id: 'blah1', name: 'blah2')])
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'Picker', 'call')).to eq(expected_tests)
+  end
+
   it 'refuses a class spec when every flow filters away' do
     code = <<~RUBY
       MyClass = Data.define(:id, :name)

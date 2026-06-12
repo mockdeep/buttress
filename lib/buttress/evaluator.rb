@@ -23,11 +23,12 @@ module Buttress
   # a vacuous walk, the signal that a satisfied world may still be
   # degenerate. Condition's enrichment search reads it.
   class Trace
-    attr_reader :iterations
+    attr_reader :iterations, :membership_misses
 
     def initialize
       @iterations = 0
       @vacuous = false
+      @membership_misses = []
     end
 
     def iteration!
@@ -40,6 +41,16 @@ module Buttress
 
     def vacuous?
       @vacuous
+    end
+
+    # A membership test that came up empty: collection.include?(sought)
+    # answered false during the replay. The enrichment climb offers the
+    # collection's members to whatever input slot holds the sought
+    # value — the move that makes a derived-value comparison hold,
+    # where no slot mutation could (tag_names derives from a scan; the
+    # filter's tag_name can simply become what the scan yields).
+    def membership_miss!(collection, sought)
+      @membership_misses << [collection.dup, sought]
     end
   end
 
@@ -211,11 +222,42 @@ module Buttress
     def dispatch(operator, args, arg_nodes = [])
       value = resolve_send(operator, args, arg_nodes)
       value = instance_type_query(operator, args) if value.equal?(MISSING)
+      value = data_with(operator, args) if value.equal?(MISSING)
       if value.equal?(MISSING)
         raise CannotEvaluate, "#{@class_node.name}##{operator}"
       end
 
       value
+    end
+
+    # Data#with constructs the copy through new with the merged member
+    # set — a custom initialize runs again (host-verified: a doubling
+    # initialize doubles once more under with), so the interpretation
+    # goes through the same construction path.
+    def data_with(operator, args)
+      members = @class_node&.data_members || []
+      return MISSING unless operator == :with && members.any?
+
+      changes = args.empty? ? {} : args.first
+      return MISSING unless args.size <= 1 && changes.is_a?(Hash)
+
+      current = members.to_h { |member| [member, @ivars[:"@#{member}"]] }
+      merged = current.merge(changes)
+      init = @class_node.lookup_method(:initialize)
+      if init
+        evaluator = Evaluator.new(
+          class_node: @class_node, sources: @sources, depth: @depth,
+          class_path: @class_path, target: @target, trace: @trace,
+        )
+        evaluator.invoke_method(init, [], merged)
+        ivars = evaluator.ivars
+      else
+        ivars = merged.transform_keys { |name| :"@#{name}" }
+      end
+      InstanceValue.new(
+        class_path: @class_path, positional: [], keywords: merged,
+        ivars: ivars,
+      )
     end
 
     def call(node, env)
@@ -830,7 +872,12 @@ module Buttress
       end
 
       begin
-        receiver.public_send(operator, *args)
+        result = receiver.public_send(operator, *args)
+        if operator == :include? && result == false &&
+           receiver.is_a?(Array) && args.size == 1
+          @trace.membership_miss!(receiver, args.first)
+        end
+        result
       rescue StandardError => error
         raise cannot_send(receiver, operator, " raises #{error.class}")
       end

@@ -160,14 +160,27 @@ no test.
   `Filters::*`), and shares the search budget. The replay is the
   oracle, so a found assignment is verified by construction.
   Finally, a *satisfied* world can still be degenerate — the
-  evaluator's `Trace` records block iterations, and a world whose
-  blocks walked empty collections zero times triggers enrichment
-  (tier-3, the success-improving search): swap one collection-shaped
-  input for a one-element collection of a synthesized project
-  instance (name affinity: `cards` → `Card`; a variant empties the
-  instance's own collection-named inputs so deep graphs construct),
-  keeping the swap only when the path still satisfies and strictly
-  more iterations ran. A satisfied world is never traded for a
+  evaluator's `Trace` records block iterations (Enumerator-wrapped
+  walks included) and failed membership tests, and a world whose
+  blocks walked empty collections zero times, or whose replay
+  observed an `include?` come up false, triggers enrichment (tier-3,
+  the success-improving search). Each collection-shaped slot offers
+  one-element candidates richest-first — the deep constructor-keyword
+  hash (`constructor_keyword_hash` recurses to `FILL_DEPTH`, filling
+  plural-named keyword slots whose element class resolves by name
+  affinity (`cards` → `Card`) or by consumer hint (the initialize
+  body passing `check_items` to `ChecklistItem.from_data` names the
+  element class at the call site), so nested collections walk too),
+  then the filled instance, the plain default-input instance, and the
+  emptied variant. A failed membership test enables the
+  cross-pollination move (tier-3c): the observed collection's members
+  are offered to whatever input slot holds the sought value — the
+  assignment that makes a derived-value comparison hold
+  (`tag_names.include?(tag_name)` with `tag_name = '<no tag>'`),
+  unreachable by mutating either side blindly. A candidate is kept
+  only when the path still satisfies and the world is strictly richer
+  (`Condition#richer?`): more iterations, or equal iterations with
+  fewer membership misses. A satisfied world is never traded for a
   failing one. A solved path whose return expression is a
   comparison-family send (`<=>`, the equality selectors, `?`-query
   sends) additionally splits by outcome (tier-3b): one satisfied

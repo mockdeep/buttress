@@ -217,7 +217,8 @@ class Condition
   # a satisfied world is never traded for a failing one, and each
   # accepted step consumes a slot, so the climb terminates.
   def enrich(best)
-    return best unless best.evaluator.trace.vacuous?
+    trace = best.evaluator.trace
+    return best unless trace.vacuous? || trace.membership_misses.any?
 
     @search_attempts ||= 0
     improved = enrichment_step(best)
@@ -225,7 +226,9 @@ class Condition
   end
 
   def enrichment_step(best)
-    enrichment_candidates(best).each do |positional, keywords, bindings|
+    candidates =
+      enrichment_candidates(best) + cross_pollination_candidates(best)
+    candidates.each do |positional, keywords, bindings|
       return nil if @search_attempts >= SEARCH_BUDGET
 
       @search_attempts += 1
@@ -234,10 +237,42 @@ class Condition
       rescue Buttress::CannotEvaluate, Buttress::UnsatisfiablePath
         next
       end
-      return candidate if candidate.evaluator.trace.iterations >
-                          best.evaluator.trace.iterations
+      return candidate if richer?(candidate, best)
     end
     nil
+  end
+
+  # Strictly better worlds only: more block iterations, or the same
+  # iterations with fewer membership misses (a derived-value
+  # comparison now holds). Never fewer iterations — a satisfied walk
+  # is not traded away for a comparison.
+  def richer?(candidate, best)
+    candidate_trace = candidate.evaluator.trace
+    best_trace = best.evaluator.trace
+    return true if candidate_trace.iterations > best_trace.iterations
+
+    candidate_trace.iterations == best_trace.iterations &&
+      candidate_trace.membership_misses.size <
+        best_trace.membership_misses.size
+  end
+
+  # Tier-3c, the cross-pollination move: a membership test that came
+  # up empty during the replay names both sides — the derived
+  # collection and the sought value. When the sought value is some
+  # input slot's current value, each member of the collection is a
+  # candidate for that slot: the assignment that makes the comparison
+  # hold, unreachable by mutating either side blindly (tag_names
+  # derives from a scan of another input; the filter's tag_name can
+  # simply become what the scan yields).
+  def cross_pollination_candidates(best)
+    best.evaluator.trace.membership_misses.flat_map do |collection, sought|
+      enrichment_slots(best)
+        .select { |_, _, _, current| current == sought }
+        .flat_map do |kind, name, key, current|
+          collection.reject { |member| member == current }
+            .map { |member| swap_slot(best, kind, name, key, member) }
+        end
+    end
   end
 
   # One-swap variants of the solved world: each constructor parameter
