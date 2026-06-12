@@ -1948,4 +1948,45 @@ RSpec.describe Buttress::Composer, '#call' do
 
     expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
   end
+
+  it 'interprets a frozen-constant cycle through instance state' do
+    code = <<~RUBY
+      class MyClass
+        FRAMES = ['-', '|'].freeze
+
+        def initialize(state)
+          @state = state
+          @spinner = state == 'on' ? FRAMES.cycle : nil
+        end
+
+        def icon
+          return @spinner.next if on?
+
+          'x'
+        end
+
+        def on?
+          @state == 'on'
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe MyClass, '#icon' do
+        it 'returns @spinner.next when on? is true' do
+          my_class = MyClass.new('on')
+
+          expect(my_class.icon).to eq('-')
+        end
+
+        it 'returns "x" when on? is false' do
+          my_class = MyClass.new('blah1')
+
+          expect(my_class.icon).to eq('x')
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'icon')).to eq(expected_tests)
+  end
 end

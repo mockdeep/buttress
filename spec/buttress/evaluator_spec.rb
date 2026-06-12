@@ -114,6 +114,34 @@ RSpec.describe Buttress::Evaluator do
     expect(call(expr('[1, 2, 3].each_slice(2).to_a'))).to eq([[1, 2], [3]])
   end
 
+  it 'evaluates freeze on values the evaluator built' do
+    expect(call(expr("['a', 'b'].freeze"))).to eq(%w[a b])
+    expect(call(expr("'ab'.freeze"))).to eq('ab')
+    expect(call(expr('{ a: 1 }.freeze'))).to eq({ a: 1 })
+  end
+
+  it 'degrades mutation of a frozen value' do
+    expect { call(expr("['a'].freeze << 'b'")) }
+      .to raise_error(Buttress::CannotEvaluate, /FrozenError/)
+  end
+
+  it 'interprets Array#cycle as a deterministic enumerator' do
+    expect(call(expr("['a', 'b'].cycle.next"))).to eq('a')
+    expect(call(expr("e = ['a', 'b'].cycle\ne.next\ne.next"))).to eq('b')
+    expect(call(expr("e = ['a', 'b'].cycle\ne.next\ne.next\ne.next")))
+      .to eq('a')
+  end
+
+  it 'degrades cycle on an empty array' do
+    expect { call(expr('[].cycle.next')) }
+      .to raise_error(Buttress::CannotEvaluate, /Array#cycle/)
+  end
+
+  it 'degrades the block form of cycle' do
+    expect { call(expr('[1].cycle { |x| x }')) }
+      .to raise_error(Buttress::CannotEvaluate, /Array#cycle with a block/)
+  end
+
   it 'evaluates the map.with_index idiom' do
     node = expr('["a", "b"].map.with_index { |x, i| "#{i}#{x}" }')
 

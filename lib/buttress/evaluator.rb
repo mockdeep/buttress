@@ -29,7 +29,7 @@ module Buttress
         capitalize swapcase reverse strip lstrip rstrip chomp chop squeeze
         include? start_with? end_with? index rindex sub gsub tr delete
         count split chars succ next center ljust rjust slice
-        to_s to_i to_f to_sym inspect
+        to_s to_i to_f to_sym inspect freeze
       ],
       Integer => %i[
         + - * / % ** == != < > <= >= <=> nil? abs ceil floor round truncate
@@ -52,20 +52,26 @@ module Buttress
       # 1.8 and 1.9, so it needs version-aware handling first.
       # Mutators like Array#<< are safe here: they only ever touch
       # values the evaluator built itself (Condition deep-dups bindings
-      # into the evaluation env).
+      # into the evaluation env). freeze is pure for the same reason,
+      # and a later whitelisted mutation of a frozen value raises
+      # FrozenError on the host — degrading, just as the target would
+      # fail.
       Array => %i[
         + - * & | == != nil? [] << push concat length size empty? first
         last fetch reverse sort min max any? none? one?
         sum uniq compact flatten include? index join slice take drop
-        map each_slice to_a inspect
+        map each_slice to_a inspect freeze
       ],
       # Blockless map / each_slice return Enumerators; to_a realizes
       # them. Enumerators never persist — they can't Marshal, so the
       # deep-dup boundary degrades any value carrying one.
       Enumerator => %i[to_a],
+      # The symbolic Array#cycle (see interpreted_core): #next advances
+      # its cursor, safe for the same reason Array#<< is.
+      CycleValue => %i[next nil?],
       Hash => %i[== != nil? [] []= store delete fetch length size empty?
                  any? none? one? keys values invert merge include? key?
-                 has_key? has_value? value? to_a inspect],
+                 has_key? has_value? value? to_a inspect freeze],
       Range => %i[== != nil? to_a min max first last size count sum
                   include? cover?],
     }.freeze
@@ -651,6 +657,9 @@ module Buttress
       result = host_type_query(receiver, operator, args)
       return result unless result.equal?(MISSING)
 
+      result = interpreted_core(receiver, operator, args)
+      return result unless result.equal?(MISSING)
+
       unless PURE_METHODS[receiver.class]&.include?(operator)
         raise cannot_send(receiver, operator)
       end
@@ -660,6 +669,21 @@ module Buttress
       rescue StandardError => error
         raise cannot_send(receiver, operator, " raises #{error.class}")
       end
+    end
+
+    # Core methods interpreted as symbolic values instead of delegated:
+    # the host's return value couldn't cross the replay boundary.
+    # Array#cycle returns an infinite, unmarshalable Enumerator, so a
+    # CycleValue stands in. An empty receiver falls through to degrade
+    # (the host's #next would raise StopIteration), and cycle must stay
+    # out of BLOCK_METHODS — the block form never returns.
+    def interpreted_core(receiver, operator, args)
+      unless receiver.is_a?(Array) && operator == :cycle &&
+             args.empty? && !receiver.empty?
+        return MISSING
+      end
+
+      CycleValue.new(receiver)
     end
 
     def cannot_send(receiver, operator, suffix = '')

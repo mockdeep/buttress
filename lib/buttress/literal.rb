@@ -9,6 +9,11 @@ module Buttress
         value.path
       when Buttress::InstanceValue
         value.render
+      when Buttress::CycleValue
+        # No source expression rebuilds a cycle mid-iteration; a path
+        # returning the enumerator itself degrades rather than render
+        # something unfaithful.
+        raise CannotEvaluate, 'rendering a cycle enumerator'
       else
         value.inspect
       end
