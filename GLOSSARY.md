@@ -132,8 +132,10 @@ reading.
   -1/0/1, equality and `?`-query methods return true/false. One world
   only demonstrates one item from the menu, so each missing outcome
   gets its own small search (the same one-swap moves over the same
-  inputs), and each world found becomes its own test, named for the
-  outcome it shows (`returns pos <=> other.pos (-1)`). An outcome no
+  inputs, plus the cross-slot move: offering one input another
+  input's current value, the move that makes an equality hold), and
+  each world found becomes its own test, named for the outcome it
+  shows (`returns pos <=> other.pos (-1)`). An outcome no
   world reaches simply gets no test — never a skip. Output-coverage-
   driven: tests are sought per point of the return value's domain, not
   just per branch.
@@ -215,11 +217,12 @@ name at the moment they're needed.
   exception. It carries the failing predicate, which is how tier-2c
   knows *which* input to fix and *what* property it needs.
 - **generated defaults** — the `'blah1'`, `'blah2'`… placeholder values
-  buttress invents for arguments. Each position in a signature gets its
-  own (`ArgumentNode#value`), and the uniqueness is load-bearing: when
-  a failure carries a value equal to `'blah2'`, buttress knows exactly
-  which parameter it came from. (Known gap: uniqueness doesn't span
-  signatures — see `AGENTS.md`.)
+  buttress invents for arguments. Each position gets its own
+  (`ArgumentNode#value`), and the method under test's positions
+  continue after initialize's, so the uniqueness spans the
+  constructor + method pair. That uniqueness is load-bearing: when a
+  failure carries a value equal to `'blah2'`, buttress knows exactly
+  which parameter it came from.
 - **deep-dup boundary** — before each replay, `Condition`
   Marshal-copies all the bindings, so nothing evaluation mutates can
   leak back into the inputs the test will print. A value that can't be

@@ -281,21 +281,25 @@ class Condition
   end
 
   def outcome_candidates(best)
-    enrichment_slots(best).flat_map do |kind, name, key, current|
-      outcome_values(kind, name, current).map do |value|
+    slots = enrichment_slots(best)
+    siblings = slots.map(&:last)
+    slots.flat_map do |kind, name, key, current|
+      outcome_values(kind, name, current, siblings).map do |value|
         swap_slot(best, kind, name, key, value)
       end
     end
   end
 
-  # Mutation values for one slot: ordered neighbors for scalars,
-  # one-input mutations for a synthesized instance — and, for an
-  # instance bound to a method argument, the plain generated default,
-  # which steers type-guard outcomes (a core value provably fails
-  # is_a?/respond_to? against a project class).
-  def outcome_values(kind, name, current)
-    return scalar_neighbors(current) unless
-      current.is_a?(Buttress::InstanceValue)
+  # Mutation values for one slot: ordered neighbors and sibling-slot
+  # values for scalars, one-input mutations for a synthesized
+  # instance — and, for an instance bound to a method argument, the
+  # plain generated default, which steers type-guard outcomes (a core
+  # value provably fails is_a?/respond_to? against a project class).
+  def outcome_values(kind, name, current, siblings)
+    unless current.is_a?(Buttress::InstanceValue)
+      return (scalar_neighbors(current) +
+              cross_slot_values(current, siblings)).uniq
+    end
 
     values = mutated_instances(current)
     if kind == :binding
@@ -303,6 +307,14 @@ class Condition
       values += [plain.value] if plain
     end
     values
+  end
+
+  # The current values of sibling slots with the same class — the move
+  # that makes one input equal another, which equality outcomes need
+  # now that generated defaults never collide on their own.
+  def cross_slot_values(current, siblings)
+    siblings.select { |value| value.instance_of?(current.class) } -
+      [current]
   end
 
   # Values adjacent to a scalar in its ordering — an empty string sorts

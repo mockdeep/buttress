@@ -1628,13 +1628,13 @@ RSpec.describe Buttress::Composer, '#call' do
         it 'returns name == other when other.is_a?(String)' do
           my_class = MyClass.new('blah1')
 
-          expect(my_class.call_me('blah1')).to eq(true)
+          expect(my_class.call_me('blah2')).to eq(false)
         end
 
-        it 'returns name == other (false) when other.is_a?(String)' do
-          my_class = MyClass.new('')
+        it 'returns name == other (true) when other.is_a?(String)' do
+          my_class = MyClass.new('blah2')
 
-          expect(my_class.call_me('blah1')).to eq(false)
+          expect(my_class.call_me('blah2')).to eq(true)
         end
 
         it 'returns other.name == name when !(other.is_a?(String))' do
@@ -1873,6 +1873,32 @@ RSpec.describe Buttress::Composer, '#call' do
     expect(described_class.call(code, 'MyClass', 'tally')).to eq(expected_tests)
   end
 
+  it 'repairs only the failing input when a constructor input shares its class' do
+    code = <<~RUBY
+      class MyClass
+        def initialize(label)
+          @label = label
+        end
+
+        def tally(items)
+          items.each_with_object([]) { |item, memo| memo << item }
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe MyClass, '#tally' do
+        it 'returns items.each_with_object([]) { |item, memo| memo << item }' do
+          my_class = MyClass.new('blah1')
+
+          expect(my_class.tally([])).to eq([])
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'tally')).to eq(expected_tests)
+  end
+
   it 'keeps the original skip when no repair candidate answers' do
     code = <<~RUBY
       class MyClass
@@ -1919,7 +1945,7 @@ RSpec.describe Buttress::Composer, '#call' do
         it 'returns true' do
           my_class = MyClass.new
 
-          expect(my_class.same?('blah1')).to eq(true)
+          expect(my_class.same?('blah2')).to eq(true)
         end
       end
     RUBY

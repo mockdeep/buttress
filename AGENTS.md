@@ -270,18 +270,21 @@ diff branch and compare assertions instead.
   so it can fall back to a plain default instead. Classes re-resolve
   by name at dispatch time. The other symbolic values (`CycleValue`,
   `SubjectCall`) follow the same plain-values rule.
-- **Generated argument defaults (`'blah1'`, `'blah2'`…) are unique per
-  position within a signature** (`ArgumentNode#value`), and the repair
-  search depends on that: `CannotEvaluate` carries its receiver, and
-  value equality with a parameter's current default is what traces a
-  failure back to the input it came from. Collapsing defaults to a
-  shared value would silently widen repair targeting to a fanout.
-  Known gap: uniqueness does not span signatures — a constructor's
-  position-1 default and a method's position-1 default are both
-  `'blah1'`, so a repair can mis-attribute across them. The result is
-  still oracle-verified, just intent-obscuring (`Filters::Tag.new([])`
-  on Subsequent is the standing symptom); the fix is making positions
-  unique across the constructor + method pair.
+- **Generated argument defaults (`'blah1'`, `'blah2'`…) are unique
+  across the constructor + method pair** (`ArgumentNode#value`; the
+  method under test's positions continue after initialize's via
+  `MethodNode#position_offset`), and the repair search depends on
+  that: `CannotEvaluate` carries its receiver, and value equality
+  with a parameter's current default is what traces a failure back to
+  the input it came from. Collapsing defaults to a shared value would
+  silently widen repair targeting to a fanout, and a collision across
+  signatures would let a repair mis-attribute a method argument's
+  failure to a constructor input (`Filters::Tag.new([])` on
+  Subsequent was the symptom). A consequence: equality outcomes never
+  ride on accidentally-colliding defaults — the tier-3b cross-slot
+  move (each scalar slot also offers its sibling slots' current
+  values) is what steers `name == other`-style comparisons equal,
+  deliberately.
 - **Never whitelist `hash` or `object_id`** (or anything else
   process-seeded): the host-computed value differs run to run, so the
   generated assertion would be flaky-wrong. The hash-delegation idiom
