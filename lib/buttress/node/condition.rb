@@ -374,6 +374,12 @@ class Condition
     (singles + pairs).first(ATTEMPT_BUDGET)
   end
 
+  # String-content predicates whose literal argument is itself a value
+  # satisfying them: "@".start_with?("@"), "x".include?("x"). Harvested
+  # so inputs flowing into content checks (split words, substrings)
+  # have a candidate that steers the check true.
+  CONTENT_PREDICATES = %i[start_with? end_with? include?].freeze
+
   # Literal values the class's own code compares against — the
   # candidate pool for steering instance-state predicates.
   def comparison_literals
@@ -391,12 +397,20 @@ class Condition
     found
   end
 
-  # Operand nodes of equality comparisons and case/when clauses.
+  # Operand nodes of equality comparisons, case/when clauses, and
+  # content-predicate arguments.
   def comparison_operands(node)
     operands =
       case node.type
       when :send
-        %i[== !=].include?(node.children[1]) ? node.children.values_at(0, 2) : []
+        operator = node.children[1]
+        if %i[== !=].include?(operator)
+          node.children.values_at(0, 2)
+        elsif CONTENT_PREDICATES.include?(operator)
+          node.children.drop(2)
+        else
+          []
+        end
       when :when
         node.children[0..-2]
       else

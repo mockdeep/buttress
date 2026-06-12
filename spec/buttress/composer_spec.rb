@@ -2015,4 +2015,38 @@ RSpec.describe Buttress::Composer, '#call' do
 
     expect(described_class.call(code, 'MyClass', 'links')).to eq(expected_tests)
   end
+
+  it 'steers content predicates with their own literal arguments' do
+    code = <<~RUBY
+      class MyClass
+        def initialize(text)
+          @text = text
+        end
+
+        def tags
+          tags = @text.split.select { |word| word.start_with?('#') }
+          tags << 'none' if tags.empty?
+          tags
+        end
+      end
+    RUBY
+
+    expected_tests = <<~'RUBY'
+      RSpec.describe MyClass, '#tags' do
+        it 'returns tags when tags is empty' do
+          my_class = MyClass.new('blah1')
+
+          expect(my_class.tags).to eq(["none"])
+        end
+
+        it 'returns tags when tags is not empty' do
+          my_class = MyClass.new('#')
+
+          expect(my_class.tags).to eq(["#"])
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'tags')).to eq(expected_tests)
+  end
 end
