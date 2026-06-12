@@ -8,7 +8,6 @@ Gem::Specification.new do |spec|
 
   spec.summary       = %q{Buttress helps automate testing for your codebase}
   spec.homepage      = "https://github.com/mockdeep/buttress"
-  spec.license       = "MIT"
   spec.required_ruby_version = Gem::Requirement.new(">= 1.8.7")
 
   spec.metadata["homepage_uri"] = spec.homepage

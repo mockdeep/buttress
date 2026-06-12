@@ -6,7 +6,8 @@ symbolic values, the skip table) is defined in `GLOSSARY.md`.
 Buttress statically analyzes Ruby code and generates deterministic RSpec
 tests from control-flow analysis: one test per execution path through a
 method (plus outcome variants when a path's return value has an
-enumerable domain), with concrete argument values solved from the branch
+enumerable domain, and reader flows for member values the constructor
+computes), with concrete argument values solved from the branch
 predicates and expected values computed by a static interpreter. Its target use case
 is backfilling characterization tests on legacy codebases (including
 Ruby 1.8 / Rails 2 era) before modernizing them.
@@ -150,7 +151,9 @@ no test.
   outcome gets its own one-swap search over the same slots — scalar
   neighbors ('' sorts below any generated default, a suffixed copy
   above; seeded comparison literals cover equality with specific
-  values), one-input rebuilds of a synthesized instance, and the
+  values), the cross-slot move (each scalar slot also offers its
+  sibling slots' current values, the move that makes an equality
+  hold), one-input rebuilds of a synthesized instance, and the
   plain default in place of an instance (a core value provably fails
   `is_a?` against a project class) — and each world found renders as
   its own test, named by the outcome (`returns pos <=> other.pos
