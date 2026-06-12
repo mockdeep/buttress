@@ -2,8 +2,9 @@
 
 Buttress statically analyzes Ruby code and generates deterministic RSpec
 tests from control-flow analysis: one test per execution path through a
-method, with concrete argument values solved from the branch predicates
-and expected values computed by a static interpreter. Its target use case
+method (plus outcome variants when a path's return value has an
+enumerable domain), with concrete argument values solved from the branch
+predicates and expected values computed by a static interpreter. Its target use case
 is backfilling characterization tests on legacy codebases (including
 Ruby 1.8 / Rails 2 era) before modernizing them.
 
@@ -129,9 +130,22 @@ The CLI takes `'ClassName#method'` for one method (rendered with
   instance's own collection-named inputs so deep graphs construct),
   keeping the swap only when the path still satisfies and strictly
   more iterations ran. A satisfied world is never traded for a
-  failing one. Outcomes: branch matches → concrete test; no inputs
+  failing one. A solved path whose return expression is a
+  comparison-family send (`<=>`, the equality selectors, `?`-query
+  sends) additionally splits by outcome (tier-3b): one satisfied
+  world witnesses only one point of the return value's domain
+  (-1/0/1 for `<=>`, true/false otherwise), so each uncovered
+  outcome gets its own one-swap search over the same slots — scalar
+  neighbors ('' sorts below any generated default, a suffixed copy
+  above; harvested comparison literals cover equality with specific
+  values), one-input rebuilds of a synthesized instance, and the
+  plain default in place of an instance (a core value provably fails
+  `is_a?` against a project class) — and each world found renders as
+  its own test, named by the outcome (`returns pos <=> other.pos
+  (-1)`). An outcome no candidate world reaches gets no test, never
+  a skip. Outcomes: branch matches → concrete test; no inputs
   found → skip ("cannot satisfy"); evaluation fails → skip ("cannot
-  yet evaluate"). See `Condition#solution` and
+  yet evaluate"). See `Condition#solution`, `#variants`, and
   `#compute_skip_reason`.
 - `Evaluator` resolves receiverless sends in method lookup order: own
   `def` (interpreted) → attr macros and Data members → `include`d

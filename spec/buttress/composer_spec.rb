@@ -1550,6 +1550,18 @@ RSpec.describe Buttress::Composer, '#call' do
 
           expect(my_class.call_me(MyClass.new('blah1'))).to eq(0)
         end
+
+        it 'returns pos <=> other.pos (-1)' do
+          my_class = MyClass.new('')
+
+          expect(my_class.call_me(MyClass.new('blah1'))).to eq(-1)
+        end
+
+        it 'returns pos <=> other.pos (1)' do
+          my_class = MyClass.new('blah1x')
+
+          expect(my_class.call_me(MyClass.new('blah1'))).to eq(1)
+        end
       end
     RUBY
 
@@ -1577,6 +1589,18 @@ RSpec.describe Buttress::Composer, '#call' do
           my_class = MyClass.new(pos: 'blah1')
 
           expect(my_class.call_me(MyClass.new(pos: 'blah1'))).to eq(0)
+        end
+
+        it 'returns pos <=> other.pos (-1)' do
+          my_class = MyClass.new(pos: '')
+
+          expect(my_class.call_me(MyClass.new(pos: 'blah1'))).to eq(-1)
+        end
+
+        it 'returns pos <=> other.pos (1)' do
+          my_class = MyClass.new(pos: 'blah1x')
+
+          expect(my_class.call_me(MyClass.new(pos: 'blah1'))).to eq(1)
         end
       end
     RUBY
@@ -1607,10 +1631,22 @@ RSpec.describe Buttress::Composer, '#call' do
           expect(my_class.call_me('blah1')).to eq(true)
         end
 
+        it 'returns name == other (false) when other.is_a?(String)' do
+          my_class = MyClass.new('')
+
+          expect(my_class.call_me('blah1')).to eq(false)
+        end
+
         it 'returns other.name == name when !(other.is_a?(String))' do
           my_class = MyClass.new('blah1')
 
           expect(my_class.call_me(MyClass.new('blah1'))).to eq(true)
+        end
+
+        it 'returns other.name == name (false) when !(other.is_a?(String))' do
+          my_class = MyClass.new('')
+
+          expect(my_class.call_me(MyClass.new('blah1'))).to eq(false)
         end
       end
     RUBY
@@ -1633,6 +1669,12 @@ RSpec.describe Buttress::Composer, '#call' do
           my_class = MyClass.new
 
           expect(my_class.call_me(MyClass.new)).to eq(true)
+        end
+
+        it 'returns other.is_a?(self.class) (false)' do
+          my_class = MyClass.new
+
+          expect(my_class.call_me('blah1')).to eq(false)
         end
       end
     RUBY
@@ -2183,5 +2225,39 @@ RSpec.describe Buttress::Composer, '#call' do
     RUBY
 
     expect(described_class.call(code, 'Basket', 'labels')).to eq(expected_tests)
+  end
+
+  it 'splits a comparison return into one test per outcome' do
+    code = <<~RUBY
+      class MyClass
+        attr_reader :state
+
+        def initialize(state:)
+          @state = state
+        end
+
+        def checked?
+          state == "complete"
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe MyClass, '#checked?' do
+        it 'returns state == "complete"' do
+          my_class = MyClass.new(state: 'blah1')
+
+          expect(my_class.checked?).to eq(false)
+        end
+
+        it 'returns state == "complete" (true)' do
+          my_class = MyClass.new(state: 'complete')
+
+          expect(my_class.checked?).to eq(true)
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'checked?')).to eq(expected_tests)
   end
 end

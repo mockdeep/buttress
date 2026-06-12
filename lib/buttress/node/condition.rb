@@ -35,6 +35,7 @@ class Condition
 
   def description
     base = "returns #{return_name.gsub("'", '"')}"
+    base = "#{base} (#{Buttress::Literal.render(@outcome)})" if defined?(@outcome)
     return base if path.predicates.empty?
 
     "#{base} when #{path.predicates.map(&:description).join(' and ')}"
@@ -98,6 +99,33 @@ class Condition
     return @skip_reason if defined?(@skip_reason)
 
     @skip_reason = compute_skip_reason
+  end
+
+  # The tests this path yields: the solved condition itself, plus
+  # outcome variants (tier-3b) when the return expression is a
+  # comparison-family send. A single satisfied world witnesses only one
+  # point of such a return value's domain (-1/0/1 for <=>, true/false
+  # for the equality and query selectors); each uncovered outcome gets
+  # its own search for a world that produces it, and each world found
+  # becomes its own test. The replay stays the oracle — a variant is
+  # emitted only when the path still satisfies and the return value
+  # concretely equals the target — and an outcome no candidate world
+  # reaches simply gets no test.
+  def variants
+    return [self] if skip_reason
+
+    [self] + outcome_variants
+  end
+
+  protected
+
+  # Locks a copy of this condition to one found world: rendering reads
+  # the pinned attempt, and the description carries the outcome that
+  # distinguishes the variant from its siblings.
+  def pin(attempt, target)
+    @solution = attempt
+    @outcome = target
+    @return_value = nil
   end
 
   private
@@ -184,20 +212,153 @@ class Condition
       next [] if enriched?(current)
 
       enrichment_values(name).map do |value|
-        case kind
-        when :positional
-          swapped = best.constructor_positional.dup
-          swapped[key] = value
-          [swapped, best.constructor_keywords, best.bindings]
-        when :keyword
-          [best.constructor_positional,
-           best.constructor_keywords.merge(name => value), best.bindings]
-        when :binding
-          [best.constructor_positional, best.constructor_keywords,
-           best.bindings.merge(name => value)]
-        end
+        swap_slot(best, kind, name, key, value)
       end
     end
+  end
+
+  # One world derived from a solved attempt with a single slot swapped.
+  def swap_slot(best, kind, name, key, value)
+    case kind
+    when :positional
+      swapped = best.constructor_positional.dup
+      swapped[key] = value
+      [swapped, best.constructor_keywords, best.bindings]
+    when :keyword
+      [best.constructor_positional,
+       best.constructor_keywords.merge(name => value), best.bindings]
+    when :binding
+      [best.constructor_positional, best.constructor_keywords,
+       best.bindings.merge(name => value)]
+    end
+  end
+
+  # Return-expression selectors with enumerable outcome domains.
+  ORDERING_OUTCOMES = [-1, 0, 1].freeze
+  BOOLEAN_OUTCOMES = [true, false].freeze
+  EQUALITY_SELECTORS = %i[== != eql? equal?].freeze
+
+  # The outcome domain of this path's return expression, or empty when
+  # outcome splitting doesn't apply.
+  def outcome_targets
+    return [] if model?
+
+    node = path.return_node
+    return [] unless node.is_a?(Parser::AST::Node) && node.type == :send
+
+    selector = node.children[1]
+    return ORDERING_OUTCOMES if selector == :<=>
+    return BOOLEAN_OUTCOMES if EQUALITY_SELECTORS.include?(selector) ||
+                               selector.to_s.end_with?('?')
+
+    []
+  end
+
+  def outcome_variants
+    targets = outcome_targets - [solved.return_value]
+    return [] if targets.empty?
+
+    @search_attempts ||= 0
+    targets.filter_map { |target| outcome_variant(target) }
+  end
+
+  # Tier-3b: searches one-swap mutations of the solved world for one
+  # whose replay still satisfies every branch and returns the target
+  # outcome.
+  def outcome_variant(target)
+    outcome_candidates(solved).each do |positional, keywords, bindings|
+      return nil if @search_attempts >= ATTEMPT_BUDGET
+
+      @search_attempts += 1
+      begin
+        candidate = attempt(positional, keywords, binding_overrides: bindings)
+      rescue Buttress::CannotEvaluate, Buttress::UnsatisfiablePath
+        next
+      end
+      return dup.tap { |v| v.pin(candidate, target) } if
+        candidate.return_value == target
+    end
+    nil
+  end
+
+  def outcome_candidates(best)
+    enrichment_slots(best).flat_map do |kind, name, key, current|
+      outcome_values(kind, name, current).map do |value|
+        swap_slot(best, kind, name, key, value)
+      end
+    end
+  end
+
+  # Mutation values for one slot: ordered neighbors for scalars,
+  # one-input mutations for a synthesized instance — and, for an
+  # instance bound to a method argument, the plain generated default,
+  # which steers type-guard outcomes (a core value provably fails
+  # is_a?/respond_to? against a project class).
+  def outcome_values(kind, name, current)
+    return scalar_neighbors(current) unless
+      current.is_a?(Buttress::InstanceValue)
+
+    values = mutated_instances(current)
+    if kind == :binding
+      plain = method_node.args.find { |param| param.name == name }
+      values += [plain.value] if plain
+    end
+    values
+  end
+
+  # Values adjacent to a scalar in its ordering — an empty string sorts
+  # before any generated default and a suffixed copy sorts after, so a
+  # comparison against the unmutated side can land on either side of
+  # equal — plus the literals the class compares against, which cover
+  # equality with specific values (state == "complete").
+  def scalar_neighbors(current)
+    case current
+    when String
+      (['', "#{current}x"] + comparison_literals.grep(String) - [current])
+        .uniq
+    when Integer
+      ([current - 1, current + 1] + comparison_literals.grep(Integer) -
+        [current]).uniq
+    else
+      []
+    end
+  end
+
+  # One-input mutations of a synthesized instance, rebuilt through the
+  # same constructor machinery that built it.
+  def mutated_instances(instance)
+    instance_input_pairs(instance).flat_map do |name, current|
+      scalar_neighbors(current).filter_map do |value|
+        rebuild_instance(instance, name => value)
+      end
+    end
+  end
+
+  def instance_input_pairs(instance)
+    names = instance_constructor_params(instance)
+      .select { |param| param.type == :arg }
+      .map(&:name)
+    names.zip(instance.positional) + instance.keywords.to_a
+  end
+
+  def instance_constructor_params(instance)
+    return constructor_params if same_class?(instance)
+
+    init = resolve_foreign_class(instance.class_path)
+      &.lookup_method(:initialize)
+    init ? init.args : []
+  end
+
+  def rebuild_instance(instance, overrides)
+    if same_class?(instance)
+      build_instance(overrides)
+    else
+      foreign_instance(instance.class_path, overrides)
+    end
+  end
+
+  def same_class?(instance)
+    instance.class_path == (class_name || class_node.name)
   end
 
   def enrichment_slots(best)
@@ -745,10 +906,10 @@ class Condition
     @synthesized_instance = build_instance
   end
 
-  def build_instance
+  def build_instance(overrides = {})
     return nil unless synthesizable?
 
-    positional, keywords = default_constructor_inputs
+    positional, keywords = constructor_inputs(overrides)
     evaluator = build_evaluator(positional, keywords)
     Buttress::InstanceValue.new(
       class_path: class_name || class_node.name,
