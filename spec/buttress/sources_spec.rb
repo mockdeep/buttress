@@ -74,6 +74,90 @@ RSpec.describe Buttress::Sources do
       .to eq(%i[name state])
   end
 
+  it 'indexes public method definitions across the project' do
+    File.write(File.join(root, 'lib/fake/worker.rb'), <<~RUBY)
+      module Fake
+        class Worker
+          def call(input)
+            input
+          end
+        end
+
+        module Pipeline
+          class << self
+            def call(input)
+              input
+            end
+          end
+        end
+
+        class Builder
+          def self.call(input)
+            input
+          end
+        end
+      end
+    RUBY
+
+    expect(sources.definers_of(:call)).to contain_exactly(
+      Buttress::Sources::Definer.new('Fake::Worker', :instance),
+      Buttress::Sources::Definer.new('Fake::Pipeline', :singleton),
+      Buttress::Sources::Definer.new('Fake::Builder', :singleton),
+    )
+  end
+
+  it 'never offers private definitions as definers' do
+    File.write(File.join(root, 'lib/fake/worker.rb'), <<~RUBY)
+      module Fake
+        class Worker
+          def initialize(seed)
+            @seed = seed
+          end
+
+          private
+
+          def call(input)
+            input
+          end
+        end
+
+        module Pipeline
+          class << self
+            private
+
+            def call(input)
+              input
+            end
+          end
+        end
+      end
+    RUBY
+
+    expect(sources.definers_of(:call)).to be_empty
+    expect(sources.definers_of(:initialize)).to be_empty
+  end
+
+  it 'records one definer for a method defined across reopens' do
+    File.write(File.join(root, 'lib/fake/worker.rb'), <<~RUBY)
+      class Fake::Worker
+        def call(input)
+          input
+        end
+      end
+    RUBY
+    File.write(File.join(root, 'lib/fake/worker_extras.rb'), <<~RUBY)
+      class Fake::Worker
+        def call(input)
+          input.to_s
+        end
+      end
+    RUBY
+
+    expect(sources.definers_of(:call)).to contain_exactly(
+      Buttress::Sources::Definer.new('Fake::Worker', :instance),
+    )
+  end
+
   it 'lets the composer evaluate class methods from sibling files' do
     File.write(File.join(root, 'lib/fake/builder.rb'), <<~RUBY)
       module Fake

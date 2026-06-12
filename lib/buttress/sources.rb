@@ -7,6 +7,16 @@ module Buttress
     ROOT_MARKERS = %w[Gemfile .git].freeze
     SOURCE_DIRS = %w[lib app].freeze
 
+    # One public definition of a method somewhere in the project: the
+    # qualified path of the defining class or module, and whether the
+    # definition is class-level (:singleton) or an instance method
+    # (:instance).
+    Definer = Struct.new(:path, :kind) do
+      def singleton?
+        kind == :singleton
+      end
+    end
+
     def self.from_file(path, target: Target.default)
       root = find_root(File.expand_path(File.dirname(path)))
       root && new(root, target: target)
@@ -61,6 +71,13 @@ module Buttress
       class_index.keys.count { |key| key.split('::').last == basename } == 1
     end
 
+    # Every class and module in the project that publicly defines the
+    # named method — the duck-type candidate pool for steering values
+    # whose defaults don't respond to a method a path needs.
+    def definers_of(method_name)
+      method_index[method_name.to_sym] || []
+    end
+
     private
 
     def lookup(index, qualified_name)
@@ -81,14 +98,18 @@ module Buttress
       indexes[2]
     end
 
+    def method_index
+      indexes[3]
+    end
+
     def indexes
       @indexes ||= begin
-        index = { modules: {}, classes: {}, superclasses: {} }
+        index = { modules: {}, classes: {}, superclasses: {}, methods: {} }
         source_files.each do |file|
           ast = parse(file)
           collect(ast, [], index, RootNode.new(ast)) if ast
         end
-        [index[:modules], index[:classes], index[:superclasses]]
+        index.values_at(:modules, :classes, :superclasses, :methods)
       end
     end
 
@@ -123,6 +144,7 @@ module Buttress
             index[:superclasses][key].uniq!
           end
         end
+        collect_methods(node, key, index)
         node.children.drop(1).each do |child|
           collect(child, qualified, index, root)
         end
@@ -130,6 +152,23 @@ module Buttress
         node.children.each do |child|
           collect(child, namespace, index, root)
         end
+      end
+    end
+
+    # Records the definition's public methods under their names. The
+    # node wrappers honor visibility modifiers, so a private def is
+    # never offered as a duck-type candidate — a generated test calling
+    # it would raise NoMethodError for real.
+    def collect_methods(node, key, index)
+      wrapper = node.type == :class ? ClassNode.new(node) : ModuleNode.new(node)
+      record = lambda do |name, kind|
+        definer = Definer.new(key, kind)
+        entries = (index[:methods][name] ||= [])
+        entries << definer unless entries.include?(definer)
+      end
+      wrapper.public_method_names.each { |name| record.call(name, :instance) }
+      wrapper.public_singleton_method_names.each do |name|
+        record.call(name, :singleton)
       end
     end
 

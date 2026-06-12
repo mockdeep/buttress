@@ -9,9 +9,6 @@ class ModuleNode < ClassNode
   private
 
   def body_statements
-    body = children[1]
-    return [] if body.nil?
-
-    body.type == :begin ? body.children : [body]
+    statements_of(children[1])
   end
 end

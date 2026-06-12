@@ -45,38 +45,26 @@ class ClassNode < BaseNode
   # definition order, honoring visibility modifiers. initialize is
   # never included; it's exercised through instantiation instead.
   def public_method_names
-    visibility = :public
-    names = []
+    public_defs(body_statements) - [:initialize]
+  end
 
-    body_statements.each do |stmt|
-      next unless stmt.is_a?(Parser::AST::Node)
+  # Names of public class-level methods: `def self.x` defs and public
+  # defs inside `class << self`.
+  def public_singleton_method_names
+    body_statements.flat_map do |stmt|
+      next [] unless stmt.is_a?(Parser::AST::Node)
 
       case stmt.type
-      when :def
-        names << stmt.children.first if visibility == :public
-      when :send
-        receiver, message, *args = stmt.children
-        next unless receiver.nil? && %i[public protected private].include?(message)
+      when :defs
+        stmt.children[0].type == :self ? [stmt.children[1]] : []
+      when :sclass
+        next [] unless stmt.children[0].type == :self
 
-        if args.empty?
-          visibility = message
-        else
-          marked = args.filter_map do |arg|
-            case arg.type
-            when :sym then arg.children.last
-            when :def then arg.children.first
-            end
-          end
-          if message == :public
-            names.concat(marked)
-          else
-            names -= marked
-          end
-        end
+        public_defs(statements_of(stmt.children[1]))
+      else
+        []
       end
     end
-
-    names - [:initialize]
   end
 
   # The defining expression of a constant assigned in the class body,
@@ -116,6 +104,52 @@ class ClassNode < BaseNode
 
   private
 
+  # Names of defs in the given body statements, in definition order,
+  # honoring public/protected/private visibility modifiers (both the
+  # bare-toggle and the inline/symbol-argument forms).
+  def public_defs(statements)
+    visibility = :public
+    names = []
+
+    statements.each do |stmt|
+      next unless stmt.is_a?(Parser::AST::Node)
+
+      case stmt.type
+      when :def
+        names << stmt.children.first if visibility == :public
+      when :send
+        receiver, message, *args = stmt.children
+        next unless receiver.nil? && %i[public protected private].include?(message)
+
+        if args.empty?
+          visibility = message
+        else
+          marked = args.filter_map do |arg|
+            case arg.type
+            when :sym then arg.children.last
+            when :def then arg.children.first
+            end
+          end
+          if message == :public
+            names.concat(marked)
+          else
+            names -= marked
+          end
+        end
+      end
+    end
+
+    names
+  end
+
+  # The statement list of any body node: nil, a single expression, or a
+  # begin wrapper.
+  def statements_of(body)
+    return [] if body.nil?
+
+    body.type == :begin ? body.children : [body]
+  end
+
   # Attribute names declared by the attr-family macros in the class
   # body. The legacy `attr :name, true` form (a 1.8-ism) declares a
   # writer via its boolean flag.
@@ -142,10 +176,7 @@ class ClassNode < BaseNode
   end
 
   def body_statements
-    body = children[2]
-    return [] if body.nil?
-
-    body.type == :begin ? body.children : [body]
+    statements_of(children[2])
   end
 
   # The dotted path of a constant node, or nil for anything fancier
