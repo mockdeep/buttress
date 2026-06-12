@@ -51,8 +51,10 @@ module Buttress
       form != :unsupported
     end
 
-    # The variable the predicate constrains. Only meaningful for
-    # solvable forms.
+    # The named value the predicate tests — the variable a solvable
+    # form constrains, or (for unsupported forms like items.any?) the
+    # reference the failure-driven search may try to assign. Nil when
+    # the condition reads no direct reference.
     def variable_name
       name
     end

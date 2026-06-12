@@ -98,19 +98,25 @@ The CLI takes `'ClassName#method'` for one method (rendered with
   argument-type alternatives (a synthesized `other` instance vs the
   plain string default), budget-capped. When the replay *cannot
   evaluate* — a default doesn't answer a method the path needs — a
-  failure-driven repair search (tier-2b) swaps in values that do:
+  failure-driven search (tier-2b) swaps in values that do:
   project classes and modules defining the missing method (via
   `Sources#definers_of`; singleton definers as the constant itself,
   instance definers as synthesized instances) plus core containers
-  ([] / {}). Targeting is precise because `CannotEvaluate` carries its
-  receiver and generated defaults are unique per parameter, so the
-  failing value names the input it came from; the search is
-  depth-first, affinity-ranked (`filter:` prefers `Filters::*`), and
-  shares the attempt budget. The replay is the oracle, so a found
-  assignment is verified by construction. Outcomes: branch matches →
-  concrete test; no inputs found → skip ("cannot satisfy");
-  evaluation fails → skip ("cannot yet evaluate"). See
-  `Condition#solution` and `#compute_skip_reason`.
+  ([] / {}). The same engine recurses on *both* failure kinds: when a
+  partially-repaired world's replay takes a branch the wrong way,
+  `UnsatisfiablePath` carries the failing predicate, and a
+  satisfaction expansion (tier-2c) assigns the input the predicate
+  names — collection emptiness polarities, bound to a declared
+  constructor keyword or riding the kwrest as an undeclared key (the
+  `args.fetch(:items)` idiom). Targeting is precise because
+  `CannotEvaluate` carries its receiver and generated defaults are
+  unique per parameter, so the failing value names the input it came
+  from; the search is depth-first, affinity-ranked (`filter:` prefers
+  `Filters::*`), and shares the attempt budget. The replay is the
+  oracle, so a found assignment is verified by construction.
+  Outcomes: branch matches → concrete test; no inputs found → skip
+  ("cannot satisfy"); evaluation fails → skip ("cannot yet
+  evaluate"). See `Condition#solution` and `#compute_skip_reason`.
 - `Evaluator` resolves receiverless sends in method lookup order: own
   `def` (interpreted) → attr macros and Data members → `include`d
   module defs (same file, then `Sources`) → schema-declared model
@@ -164,10 +170,12 @@ skip reasons ranked by frequency, and crashes. How to read it:
 - **Distinguish capability gaps from genuine limits.** Injected
   collaborators are reachable when the project itself defines them —
   the tier-2b repair search substitutes project classes/modules for
-  defaults that don't answer a needed method. The genuine limits are
-  collaborators that only exist outside the project (gems, HTTP
-  clients) and branches needing non-empty collections of foreign
-  instances (no collection synthesis yet) — don't chase those buckets.
+  defaults that don't answer a needed method, and the tier-2c
+  satisfaction search supplies plain-value collections for emptiness
+  branches. The genuine limits are collaborators that only exist
+  outside the project (gems, HTTP clients) and branches needing
+  non-empty collections of *foreign instances* — don't chase those
+  buckets.
 - A "cannot satisfy" skip means buttress couldn't *find* inputs steering
   that branch with the current solver, not that the branch is
   unreachable. These are future-solver work items.

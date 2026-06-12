@@ -5,7 +5,12 @@ module Buttress
 
   # Raised when a path's solved inputs don't actually steer execution
   # down that path — the branch condition evaluates the wrong way.
-  class UnsatisfiablePath < Error; end
+  # Carries the failing Predicate so the failure-driven search can
+  # trace the branch back to the input it tested (the counterpart of
+  # CannotEvaluate carrying its receiver).
+  class UnsatisfiablePath < Error
+    attr_accessor :predicate
+  end
 end
 
 require_relative "buttress/version"

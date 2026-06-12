@@ -133,9 +133,9 @@ class Condition
   def solve
     attempt(*default_constructor_inputs)
   rescue Buttress::UnsatisfiablePath => error
-    search_inputs || raise(error)
+    search_inputs || failure_search(error) || raise(error)
   rescue Buttress::CannotEvaluate => error
-    repair_inputs(error) || raise(error)
+    failure_search(error) || raise(error)
   end
 
   # Tier-2: retries the replay with mutated inputs, looking for values
@@ -164,47 +164,87 @@ class Condition
     'FalseClass' => FalseClass, 'Array' => Array, 'Hash' => Hash,
   }.freeze
 
-  # Tier-2b: failure-driven repair. A CannotEvaluate from the replay
-  # names the method some default-valued input can't answer; values
-  # that do answer it — project collaborators that define it, or a
-  # core container — are tried in its place, one parameter at a time.
-  # Each retry either succeeds, dead-ends, or names the next missing
-  # method, steering a depth-first search. The replay is the oracle,
-  # so a found assignment is verified by construction.
-  def repair_inputs(error)
+  # Tier-2b/2c: failure-driven search. Each replay failure names what
+  # to mutate: a CannotEvaluate names the method some default-valued
+  # input can't answer (repaired with values that do answer it —
+  # project collaborators that define it, or a core container); an
+  # UnsatisfiablePath names the input its predicate tested (satisfied
+  # with the collection emptiness polarities). Each retry either
+  # succeeds, dead-ends, or names the next failure, steering a
+  # depth-first search. The replay is the oracle, so a found
+  # assignment is verified by construction.
+  def failure_search(error)
     return nil if model?
 
-    @repair_attempts = 0
-    @repair_seen = []
-    repair_search({}, {}, error)
+    @search_attempts = 0
+    @search_seen = []
+    search_step({}, {}, error)
   end
 
-  def repair_search(constructor_overrides, binding_overrides, failure)
+  def search_step(constructor_overrides, binding_overrides, failure)
     expansions(constructor_overrides, binding_overrides, failure)
       .each do |ctor, bindings|
-      next if @repair_seen.include?([ctor, bindings])
-      return nil if @repair_attempts >= ATTEMPT_BUDGET
+      next if @search_seen.include?([ctor, bindings])
+      return nil if @search_attempts >= ATTEMPT_BUDGET
 
-      @repair_seen << [ctor, bindings]
-      @repair_attempts += 1
+      @search_seen << [ctor, bindings]
+      @search_attempts += 1
       begin
         return attempt(
           *constructor_inputs(ctor), binding_overrides: bindings,
         )
-      rescue Buttress::CannotEvaluate => deeper
-        found = repair_search(ctor, bindings, deeper)
+      rescue Buttress::CannotEvaluate, Buttress::UnsatisfiablePath => deeper
+        found = search_step(ctor, bindings, deeper)
         return found if found
-      rescue Buttress::UnsatisfiablePath
-        next
       end
     end
     nil
   end
 
-  # One-override extensions of the current world, ranked so candidates
-  # whose constant path echoes the parameter's name come first
-  # (filter: => Filters::None before unrelated definers of #call).
+  # One-override extensions of the current world, sourced from the
+  # failure's kind.
   def expansions(constructor_overrides, binding_overrides, failure)
+    if failure.is_a?(Buttress::UnsatisfiablePath)
+      return satisfaction_expansions(
+        constructor_overrides, binding_overrides, failure,
+      )
+    end
+
+    repair_expansions(constructor_overrides, binding_overrides, failure)
+  end
+
+  # Collection values offered when an unsatisfiable predicate names a
+  # constructor input — a declared keyword, or a key the kwrest can
+  # carry (an args.fetch(:items) idiom). Both emptiness polarities are
+  # tried; the replay rejects the wrong one. The member string is
+  # distinct from the 'blahN' parameter defaults so receiver-traced
+  # repairs stay unambiguous.
+  SATISFACTION_CANDIDATES = [['item1'], []].freeze
+
+  def satisfaction_expansions(constructor_overrides, binding_overrides,
+                              failure)
+    name = failure.predicate&.variable_name
+    return [] unless name && constructor_assignable?(name)
+
+    SATISFACTION_CANDIDATES.map do |value|
+      [constructor_overrides.merge(name => value), binding_overrides]
+    end
+  end
+
+  # Whether a constructor call can set the named input: a declared
+  # (possibly optional) keyword binds directly, and a kwrest carries
+  # any key at all.
+  def constructor_assignable?(name)
+    constructor_params.any? do |param|
+      %i[arg kwarg kwoptarg kwrestarg].include?(param.type) &&
+        (param.type == :kwrestarg || param.name == name)
+    end
+  end
+
+  # One-override extensions ranked so candidates whose constant path
+  # echoes the parameter's name come first (filter: => Filters::None
+  # before unrelated definers of #call).
+  def repair_expansions(constructor_overrides, binding_overrides, failure)
     receiver_class, method_name = parse_failure(failure.message)
     return [] unless receiver_class
 
@@ -492,8 +532,11 @@ class Condition
       case step
       when Buttress::Predicate
         taken = evaluator.call(step.node, acc) ? true : false
-        raise Buttress::UnsatisfiablePath, step.source unless
-          taken == step.polarity
+        unless taken == step.polarity
+          error = Buttress::UnsatisfiablePath.new(step.source)
+          error.predicate = step
+          raise error
+        end
       else
         evaluator.call(step, acc)
       end
@@ -567,14 +610,30 @@ class Condition
        sources.superclass_names(class_name || class_node.name).empty?)
   end
 
+  # Required parameters always get a value; optional keywords only
+  # when overridden (otherwise the declared default applies). Override
+  # keys naming no parameter ride through the kwrest, when there is
+  # one — the args.fetch(:items) escape hatch.
   def constructor_inputs(overrides = {})
     positional = constructor_params
       .select { |param| param.type == :arg }
       .map { |param| overrides.fetch(param.name, param.value) }
     keywords = constructor_params
-      .select { |param| param.type == :kwarg }
+      .select do |param|
+        param.type == :kwarg ||
+          (param.type == :kwoptarg && overrides.key?(param.name))
+      end
       .to_h { |param| [param.name, overrides.fetch(param.name, param.value)] }
-    [positional, keywords]
+    [positional, keywords.merge(kwrest_extras(overrides))]
+  end
+
+  def kwrest_extras(overrides)
+    return {} unless constructor_params.any? do |param|
+      param.type == :kwrestarg
+    end
+
+    declared = constructor_params.map(&:name)
+    overrides.reject { |name, _| declared.include?(name) }
   end
 
   def default_constructor_inputs

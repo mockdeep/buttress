@@ -2049,4 +2049,43 @@ RSpec.describe Buttress::Composer, '#call' do
 
     expect(described_class.call(code, 'MyClass', 'tags')).to eq(expected_tests)
   end
+
+  it 'satisfies a collection predicate through the kwrest' do
+    code = <<~RUBY
+      class MyClass
+        attr_reader :items
+
+        def initialize(name:, **options)
+          @name = name
+          @items = options.fetch(:items) { [] }
+        end
+
+        def summary
+          if items.any?
+            items.join(', ')
+          else
+            'none'
+          end
+        end
+      end
+    RUBY
+
+    expected_tests = <<~'RUBY'
+      RSpec.describe MyClass, '#summary' do
+        it 'returns items.join(", ") when items.any?' do
+          my_class = MyClass.new(name: 'blah1', items: ["item1"])
+
+          expect(my_class.summary).to eq('item1')
+        end
+
+        it 'returns "none" when !(items.any?)' do
+          my_class = MyClass.new(name: 'blah1')
+
+          expect(my_class.summary).to eq('none')
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'summary')).to eq(expected_tests)
+  end
 end
