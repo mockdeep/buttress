@@ -7,7 +7,7 @@ module Buttress
         "'#{value}'"
       when Buttress::ClassReference
         value.path
-      when Buttress::InstanceValue
+      when Buttress::InstanceValue, Buttress::SubjectCall
         value.render
       when Buttress::CycleValue
         # No source expression rebuilds a cycle mid-iteration; a path

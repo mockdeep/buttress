@@ -2088,4 +2088,64 @@ RSpec.describe Buttress::Composer, '#call' do
 
     expect(described_class.call(code, 'MyClass', 'summary')).to eq(expected_tests)
   end
+
+  it 'asserts hash delegation by re-deriving the value at runtime' do
+    code = <<~RUBY
+      class MyClass
+        attr_reader :id
+
+        def initialize(id)
+          @id = id
+        end
+
+        def hash
+          id.hash
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe MyClass, '#hash' do
+        it 'returns id.hash' do
+          my_class = MyClass.new('blah1')
+
+          expect(my_class.hash).to eq(my_class.id.hash)
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'hash')).to eq(expected_tests)
+  end
+
+  it 'keeps the hash skip when the reader is not publicly readable' do
+    code = <<~RUBY
+      class MyClass
+        def initialize(id)
+          @id = id
+        end
+
+        def hash
+          id.hash
+        end
+
+        private
+
+        attr_reader :id
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe MyClass, '#hash' do
+        it 'returns id.hash' do
+          skip 'Buttress cannot yet evaluate: String#hash'
+
+          my_class = MyClass.new('blah1')
+
+          my_class.hash
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'hash')).to eq(expected_tests)
+  end
 end

@@ -223,8 +223,14 @@ table to the previous run.
   shared value would silently widen repair targeting to a fanout.
 - **Never whitelist `hash` or `object_id`** (or anything else
   process-seeded): the host-computed value differs run to run, so the
-  generated assertion would be flaky-wrong. `String#hash` skips are
-  permanent and correct.
+  generated assertion would be flaky-wrong. The hash-delegation idiom
+  (`def hash; id.hash; end`) is instead asserted *relationally*: a
+  `SubjectCall` renders the expected side as a runtime chain on the
+  subject (`expect(x.hash).to eq(x.id.hash)`), so both sides evaluate
+  in the test's process and the seed cancels. Sound only because a
+  provably-public macro reader (Data member / attr_reader, unshadowed
+  by a def — `ClassNode#publicly_readable?`) returns the very object
+  the method hashed; any other process-seeded use stays skipped.
 - **Instance vs singleton lookup:** `ClassNode#lookup_method` finds
   instance defs only — it deliberately does not descend into
   `class << self`, `def self.x`, or nested class/module bodies.

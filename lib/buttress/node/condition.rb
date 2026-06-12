@@ -469,8 +469,43 @@ class Condition
     evaluator = build_evaluator(positional, keywords)
     bindings = build_bindings(evaluator, binding_overrides)
     env = replay(evaluator, deep_dup(bindings))
-    value = evaluator.call(path.return_node || nil_node, env)
+    value = return_value_for(evaluator, env)
     Attempt.new(evaluator, bindings, env, positional, keywords, value)
+  end
+
+  def return_value_for(evaluator, env)
+    evaluator.call(path.return_node || nil_node, env)
+  rescue Buttress::CannotEvaluate => error
+    subject_hash_call(error) || raise
+  end
+
+  # The hash-delegation idiom (def hash; id.hash; end). The return
+  # value is process-seeded, so no statically computed literal would
+  # hold at test time — but the expected side can re-derive it at
+  # runtime: a public macro reader returns the very object the method
+  # hashed, so subject.id.hash equals the return value under any hash
+  # semantics, identity included, with the seed cancelling in-process.
+  # Only provably-public plain ivar reads qualify (an interpreted
+  # reader body could mutate between the method's read and the
+  # assertion's).
+  def subject_hash_call(error)
+    return nil unless error.message.end_with?('#hash')
+
+    node = path.return_node
+    return nil unless node&.type == :send && node.children[1] == :hash &&
+                      node.children.size == 2
+
+    receiver = node.children.first
+    return nil unless receiver&.type == :send &&
+                      receiver.children.first.nil? &&
+                      receiver.children.size == 2
+
+    reader = receiver.children[1]
+    return nil unless class_node.publicly_readable?(reader)
+
+    Buttress::SubjectCall.new(
+      subject: class_node.instance_name, messages: [reader, :hash],
+    )
   end
 
   def build_evaluator(positional, keywords)

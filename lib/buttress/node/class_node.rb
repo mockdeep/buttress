@@ -98,6 +98,40 @@ class ClassNode < BaseNode
     attr_names(:reader)
   end
 
+  # Whether reading `name` on an instance is provably a public, plain
+  # ivar read: a Data member or attr-macro reader, declared in a
+  # public region and never demoted by a symbol-form visibility send.
+  # A def by the same name disqualifies it — the def shadows the
+  # macro, and its body could do more than read the ivar.
+  READER_MACROS = %i[attr_reader attr_accessor attr].freeze
+
+  def publicly_readable?(name)
+    return false if lookup_method(name)
+
+    visibility = :public
+    readable = data_members.include?(name)
+    body_statements.each do |stmt|
+      next unless stmt.is_a?(Parser::AST::Node) && stmt.type == :send
+
+      receiver, macro, *args = stmt.children
+      next unless receiver.nil?
+
+      named = args.any? { |arg| arg.type == :sym && arg.children.last == name }
+      if %i[public protected private].include?(macro)
+        if args.empty?
+          visibility = macro
+        elsif named
+          readable = macro == :public
+        end
+      elsif READER_MACROS.include?(macro) && named
+        # A reader macro redefines the method at the current
+        # visibility, so a non-public region demotes a prior reader.
+        readable = visibility == :public
+      end
+    end
+    readable
+  end
+
   def attr_writers
     attr_names(:writer)
   end
