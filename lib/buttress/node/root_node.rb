@@ -22,7 +22,42 @@ class RootNode < BaseNode
     node && ModuleNode.new(node, parent_node: self)
   end
 
+  # Fully qualified names of every class defined in this file, in
+  # definition order, however deeply nested in modules or written with
+  # compact qualified names.
+  def class_names
+    collect_class_names(raw_node).uniq
+  end
+
   private
+
+  def collect_class_names(node, namespace = [], found = [])
+    return found unless node.is_a?(Parser::AST::Node)
+
+    case node.type
+    when :class, :module
+      segments = const_segments(node.children.first)
+      qualified = namespace + segments
+      found << qualified.join('::') if node.type == :class
+      node.children.drop(1).each do |child|
+        collect_class_names(child, qualified, found)
+      end
+    else
+      node.children.each do |child|
+        collect_class_names(child, namespace, found)
+      end
+    end
+    found
+  end
+
+  def const_segments(node)
+    segments = []
+    while node.is_a?(Parser::AST::Node) && node.type == :const
+      segments.unshift(node.children.last.to_s)
+      node = node.children.first
+    end
+    segments
+  end
 
   def find_module_node(node, basename)
     return nil unless node.is_a?(Parser::AST::Node)

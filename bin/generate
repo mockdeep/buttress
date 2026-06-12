@@ -1,0 +1,57 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Generates a spec file for every class under DIR that has public
+# instance methods, writing each to its conventional spec location
+# (lib/foo/bar.rb -> spec/foo/bar_spec.rb). The Writer refuses to
+# overwrite, so existing spec files are reported as collisions and
+# left alone — delete or move them first to regenerate.
+#
+# usage: bin/generate DIR [TARGET_RUBY_VERSION]
+
+require_relative "../lib/buttress"
+
+dir = ARGV.first or abort "usage: bin/generate DIR [TARGET_RUBY_VERSION]"
+target_version = ARGV[1]
+target = Buttress::Target.new(target_version)
+
+written = []
+collisions = []
+failures = []
+
+Dir.glob(File.join(dir, "**", "*.rb")).sort.each do |file|
+  begin
+    root = RootNode.new(target.parse(File.read(file)))
+  rescue StandardError => error
+    failures << [file, "parse: #{error.message[0, 100]}"]
+    next
+  end
+
+  root.class_names.each do |class_name|
+    class_node = root.lookup_class(class_name)
+    next if class_node.nil? || class_node.public_method_names.empty?
+
+    begin
+      written << Buttress::Runner.call(file, class_name, target_version)
+    rescue Buttress::Error => error
+      if error.message.start_with?("refusing to overwrite")
+        collisions << [class_name, error.message[/refusing to overwrite existing (.*)/, 1]]
+      else
+        failures << ["#{file} (#{class_name})", error.message[0, 100]]
+      end
+    end
+  end
+end
+
+puts "=== Written (#{written.count}) ==="
+written.each { |path| puts "  #{path}" }
+
+if collisions.any?
+  puts "\n=== Collisions (#{collisions.count}) — delete to regenerate ==="
+  collisions.each { |name, path| puts "  #{path}  (#{name})" }
+end
+
+if failures.any?
+  puts "\n=== Failures (#{failures.count}) ==="
+  failures.each { |site, message| puts "  #{site}: #{message}" }
+end

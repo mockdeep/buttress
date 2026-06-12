@@ -13,30 +13,6 @@ require_relative "../lib/buttress"
 dir = ARGV.first or abort "usage: bin/dogfood DIR [TARGET_RUBY_VERSION]"
 target = Buttress::Target.new(ARGV[1])
 
-def qualified_class_names(node, namespace = [], found = [])
-  return found unless node.is_a?(Parser::AST::Node)
-
-  case node.type
-  when :class, :module
-    name_node = node.children.first
-    segments = []
-    while name_node.is_a?(Parser::AST::Node) && name_node.type == :const
-      segments.unshift(name_node.children.last.to_s)
-      name_node = name_node.children.first
-    end
-    qualified = namespace + segments
-    found << qualified.join("::") if node.type == :class
-    node.children.drop(1).each do |child|
-      qualified_class_names(child, qualified, found)
-    end
-  else
-    node.children.each do |child|
-      qualified_class_names(child, namespace, found)
-    end
-  end
-  found
-end
-
 stats = Hash.new(0)
 skips = Hash.new(0)
 crashes = Hash.new { |hash, key| hash[key] = [] }
@@ -54,7 +30,7 @@ Dir.glob(File.join(dir, "**", "*.rb")).sort.each do |file|
     next
   end
 
-  qualified_class_names(root.raw_node).uniq.each do |class_name|
+  root.class_names.each do |class_name|
     begin
       class_node = root.find_class(class_name)
     rescue StandardError => error
