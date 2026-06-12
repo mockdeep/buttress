@@ -11,10 +11,13 @@ class Condition
 
   # A coherent solved world for one path: the constructor inputs, the
   # evaluator whose instance state they produced, the method argument
-  # bindings, and the environment after replaying the path's steps.
+  # bindings, the environment after replaying the path's steps, and the
+  # value the path returns under them. The return value is computed
+  # once, inside the attempt — the return expression may mutate state,
+  # so evaluating it again at render time could assert a wrong value.
   Attempt = Struct.new(
     :evaluator, :bindings, :env,
-    :constructor_positional, :constructor_keywords
+    :constructor_positional, :constructor_keywords, :return_value
   )
 
   attr_accessor :method_node, :path, :schema, :sources, :class_name,
@@ -42,9 +45,7 @@ class Condition
   end
 
   def return_value
-    @return_value ||= Buttress::Literal.render(
-      solved.evaluator.call(path.return_node || nil_node, solved.env),
-    )
+    @return_value ||= Buttress::Literal.render(solved.return_value)
   end
 
   # Values for the method call's required positional parameters.
@@ -133,6 +134,8 @@ class Condition
     attempt(*default_constructor_inputs)
   rescue Buttress::UnsatisfiablePath => error
     search_inputs || raise(error)
+  rescue Buttress::CannotEvaluate => error
+    repair_inputs(error) || raise(error)
   end
 
   # Tier-2: retries the replay with mutated inputs, looking for values
@@ -151,6 +154,184 @@ class Condition
       next
     end
     nil
+  end
+
+  # Core classes a generated default could be; an evaluation failure
+  # naming any other receiver isn't steerable by swapping inputs.
+  RECEIVER_CLASSES = {
+    'String' => String, 'Integer' => Integer, 'Float' => Float,
+    'Symbol' => Symbol, 'NilClass' => NilClass, 'TrueClass' => TrueClass,
+    'FalseClass' => FalseClass, 'Array' => Array, 'Hash' => Hash,
+  }.freeze
+
+  # Tier-2b: failure-driven repair. A CannotEvaluate from the replay
+  # names the method some default-valued input can't answer; values
+  # that do answer it — project collaborators that define it, or a
+  # core container — are tried in its place, one parameter at a time.
+  # Each retry either succeeds, dead-ends, or names the next missing
+  # method, steering a depth-first search. The replay is the oracle,
+  # so a found assignment is verified by construction.
+  def repair_inputs(error)
+    return nil if model?
+
+    @repair_attempts = 0
+    @repair_seen = []
+    repair_search({}, {}, error)
+  end
+
+  def repair_search(constructor_overrides, binding_overrides, failure)
+    expansions(constructor_overrides, binding_overrides, failure)
+      .each do |ctor, bindings|
+      next if @repair_seen.include?([ctor, bindings])
+      return nil if @repair_attempts >= ATTEMPT_BUDGET
+
+      @repair_seen << [ctor, bindings]
+      @repair_attempts += 1
+      begin
+        return attempt(
+          *constructor_inputs(ctor), binding_overrides: bindings,
+        )
+      rescue Buttress::CannotEvaluate => deeper
+        found = repair_search(ctor, bindings, deeper)
+        return found if found
+      rescue Buttress::UnsatisfiablePath
+        next
+      end
+    end
+    nil
+  end
+
+  # One-override extensions of the current world, ranked so candidates
+  # whose constant path echoes the parameter's name come first
+  # (filter: => Filters::None before unrelated definers of #call).
+  def expansions(constructor_overrides, binding_overrides, failure)
+    receiver_class, method_name = parse_failure(failure.message)
+    return [] unless receiver_class
+
+    values = repair_candidates(method_name)
+    targets = repair_targets(
+      failure, receiver_class, constructor_overrides, binding_overrides,
+    )
+    pairs = targets.flat_map do |kind, name, current|
+      values.reject { |value| value == current }
+        .map { |value| [kind, name, value] }
+    end
+    pairs
+      .sort_by.with_index { |(_, name, value), i| [-affinity(name, value), i] }
+      .map do |kind, name, value|
+        if kind == :constructor
+          [constructor_overrides.merge(name => value), binding_overrides]
+        else
+          [constructor_overrides, binding_overrides.merge(name => value)]
+        end
+      end
+  end
+
+  # The receiver class and method named by an evaluation failure, when
+  # the receiver is a core class an input default could be.
+  def parse_failure(message)
+    match = /\A(\w+(?:::\w+)*)#(\w+[?!=]?)/.match(message)
+    return [] unless match
+
+    [RECEIVER_CLASSES[match[1]], match[2].to_sym]
+  end
+
+  # Values plausibly standing in for an input that must answer the
+  # named method. Memoized so retried candidates compare equal across
+  # search steps.
+  def repair_candidates(method_name)
+    @repair_candidates ||= {}
+    @repair_candidates[method_name] ||= begin
+      values = definer_values(method_name)
+      values << [] if [].respond_to?(method_name)
+      values << {} if {}.respond_to?(method_name)
+      values
+    end
+  end
+
+  # Project classes and modules defining the method: a module or
+  # class-level definition is the constant itself; an instance
+  # definition is a synthesized instance, when one can be built.
+  def definer_values(method_name)
+    return [] unless sources
+
+    sources.definers_of(method_name).filter_map do |definer|
+      if definer.singleton?
+        Buttress::ClassReference.new(definer.path)
+      else
+        foreign_instance(definer.path)
+      end
+    end
+  end
+
+  # An interpreted instance of another project class, built from
+  # default constructor inputs the same way the class under test is.
+  def foreign_instance(path)
+    foreign = sources.find_class(path)
+    init = foreign&.lookup_method(:initialize)
+    return nil unless init
+
+    positional = init.args.select { |param| param.type == :arg }.map(&:value)
+    keywords = init.args
+      .select { |param| param.type == :kwarg }
+      .to_h { |param| [param.name, param.value] }
+    evaluator = Buttress::Evaluator.new(
+      class_node: foreign, sources: sources, class_path: path, target: target,
+    )
+    evaluator.run_initialize(positional.dup, keywords.dup)
+    Buttress::InstanceValue.new(
+      class_path: path, positional: positional, keywords: keywords,
+      ivars: deep_dup(evaluator.ivars),
+    )
+  rescue Buttress::CannotEvaluate
+    nil
+  end
+
+  # Parameters the failing receiver could have come from, as
+  # [kind, name, current value]. Generated defaults are unique per
+  # position, so when the failure carries its receiver, parameters
+  # currently bound to that exact value are the only plausible origins
+  # — without it, any parameter holding a value of the receiver's
+  # class could be the source. Constructor inputs and method arguments
+  # both count.
+  def repair_targets(failure, receiver_class, constructor_overrides,
+                     binding_overrides)
+    targets = constructor_params
+      .select { |param| %i[arg kwarg].include?(param.type) }
+      .map do |param|
+        current = constructor_overrides.fetch(param.name, param.value)
+        [:constructor, param.name, current]
+      end
+    targets += method_node.args
+      .select { |param| %i[arg kwarg].include?(param.type) }
+      .map do |param|
+        current = binding_overrides.fetch(param.name, param.value)
+        [:binding, param.name, current]
+      end
+
+    if failure.is_a?(Buttress::CannotEvaluate) && failure.receiver_known?
+      exact = targets.select { |_, _, value| value == failure.receiver }
+      return exact if exact.any?
+    end
+
+    targets.select { |_, _, value| value.is_a?(receiver_class) }
+  end
+
+  # Whether the candidate's constant path echoes the parameter name
+  # (filter and Filters::None, sort and Sorts::First).
+  def affinity(name, value)
+    path =
+      case value
+      when Buttress::ClassReference then value.path
+      when Buttress::InstanceValue then value.class_path
+      end
+    return 0 unless path
+
+    stem = name.to_s.downcase
+    echoes = path.downcase.split('::').any? do |segment|
+      segment.start_with?(stem) || stem.start_with?(segment)
+    end
+    echoes ? 1 : 0
   end
 
   # All candidate worlds: constructor-input mutations crossed with
@@ -234,7 +415,8 @@ class Condition
     evaluator = build_evaluator(positional, keywords)
     bindings = build_bindings(evaluator, binding_overrides)
     env = replay(evaluator, deep_dup(bindings))
-    Attempt.new(evaluator, bindings, env, positional, keywords)
+    value = evaluator.call(path.return_node || nil_node, env)
+    Attempt.new(evaluator, bindings, env, positional, keywords, value)
   end
 
   def build_evaluator(positional, keywords)

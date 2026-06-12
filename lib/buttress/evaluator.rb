@@ -1,7 +1,21 @@
 module Buttress
   # Raised when a node is beyond the evaluator's reach: user-defined
   # methods, non-whitelisted core methods, or unsupported syntax.
-  class CannotEvaluate < Error; end
+  # Failures from a concrete send carry their receiver, so the repair
+  # search can trace the failing value back to the exact input it came
+  # from (nil is a legitimate receiver, hence the explicit flag).
+  class CannotEvaluate < Error
+    attr_reader :receiver
+
+    def receiver=(value)
+      @receiver_known = true
+      @receiver = value
+    end
+
+    def receiver_known?
+      @receiver_known ||= false
+    end
+  end
 
   # Statically evaluates an expression node against an environment of
   # variable bindings, without ever executing the code under analysis.
@@ -426,7 +440,7 @@ module Buttress
 
     def with_block(receiver, operator, args)
       unless BLOCK_METHODS[receiver.class]&.include?(operator)
-        raise CannotEvaluate, "#{receiver.class}##{operator} with a block"
+        raise cannot_send(receiver, operator, ' with a block')
       end
 
       catch(:block_break) do
@@ -436,8 +450,7 @@ module Buttress
       rescue CannotEvaluate
         raise
       rescue StandardError => error
-        raise CannotEvaluate,
-              "#{receiver.class}##{operator} raises #{error.class}"
+        raise cannot_send(receiver, operator, " raises #{error.class}")
       end
     end
 
@@ -639,15 +652,20 @@ module Buttress
       return result unless result.equal?(MISSING)
 
       unless PURE_METHODS[receiver.class]&.include?(operator)
-        raise CannotEvaluate, "#{receiver.class}##{operator}"
+        raise cannot_send(receiver, operator)
       end
 
       begin
         receiver.public_send(operator, *args)
       rescue StandardError => error
-        raise CannotEvaluate,
-              "#{receiver.class}##{operator} raises #{error.class}"
+        raise cannot_send(receiver, operator, " raises #{error.class}")
       end
+    end
+
+    def cannot_send(receiver, operator, suffix = '')
+      error = CannotEvaluate.new("#{receiver.class}##{operator}#{suffix}")
+      error.receiver = receiver
+      error
     end
 
     def source(node)

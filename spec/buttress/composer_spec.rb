@@ -1809,6 +1809,56 @@ RSpec.describe Buttress::Composer, '#call' do
     expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
   end
 
+  it 'repairs a method argument to the container its usage demands' do
+    code = <<~RUBY
+      class MyClass
+        def tally(items)
+          items.each_with_object([]) { |item, memo| memo << item }
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe MyClass, '#tally' do
+        it 'returns items.each_with_object([]) { |item, memo| memo << item }' do
+          my_class = MyClass.new
+
+          expect(my_class.tally([])).to eq([])
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'tally')).to eq(expected_tests)
+  end
+
+  it 'keeps the original skip when no repair candidate answers' do
+    code = <<~RUBY
+      class MyClass
+        def initialize(client:)
+          @data = client.fetch_data
+        end
+
+        def data
+          @data
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe MyClass, '#data' do
+        it 'returns @data' do
+          skip 'Buttress cannot yet evaluate: String#fetch_data'
+
+          my_class = MyClass.new(client: 'blah1')
+
+          my_class.data
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'data')).to eq(expected_tests)
+  end
+
   it 'falls back to plain defaults when instance state cannot marshal' do
     code = <<~RUBY
       class MyClass

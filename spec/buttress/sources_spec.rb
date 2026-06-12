@@ -158,6 +158,123 @@ RSpec.describe Buttress::Sources do
     )
   end
 
+  it 'repairs a collaborator input with a module that defines the method' do
+    FileUtils.mkdir_p(File.join(root, 'lib/fake/filters'))
+    File.write(File.join(root, 'lib/fake/filters/none.rb'), <<~RUBY)
+      module Fake
+        module Filters
+          module None
+            class << self
+              def call(items)
+                items
+              end
+            end
+          end
+        end
+      end
+    RUBY
+    code = <<~RUBY
+      class MyClass
+        def initialize(filter:)
+          @filter = filter
+        end
+
+        def filtered
+          @filter.call(['x'])
+        end
+      end
+    RUBY
+
+    result = Buttress::Composer.call(code, 'MyClass', 'filtered', sources: sources)
+
+    expect(result).to include('MyClass.new(filter: Fake::Filters::None)')
+    expect(result).to include('expect(my_class.filtered).to eq(["x"])')
+  end
+
+  it 'repairs a collaborator input with a synthesized instance' do
+    File.write(File.join(root, 'lib/fake/upcaser.rb'), <<~RUBY)
+      module Fake
+        class Upcaser
+          def initialize(prefix)
+            @prefix = prefix
+          end
+
+          def call(word)
+            (@prefix + word).upcase
+          end
+        end
+      end
+    RUBY
+    code = <<~RUBY
+      class MyClass
+        def initialize(transform:)
+          @transform = transform
+        end
+
+        def shout
+          @transform.call('hi')
+        end
+      end
+    RUBY
+
+    result = Buttress::Composer.call(code, 'MyClass', 'shout', sources: sources)
+
+    expect(result)
+      .to include("MyClass.new(transform: Fake::Upcaser.new('blah1'))")
+    expect(result).to include("expect(my_class.shout).to eq('BLAH1HI')")
+  end
+
+  it 'chains repairs across collaborators named like their parameters' do
+    FileUtils.mkdir_p(File.join(root, 'lib/fake/filters'))
+    File.write(File.join(root, 'lib/fake/filters/none.rb'), <<~RUBY)
+      module Fake
+        module Filters
+          module None
+            class << self
+              def call(items)
+                items
+              end
+            end
+          end
+        end
+      end
+    RUBY
+    FileUtils.mkdir_p(File.join(root, 'lib/fake/sorts'))
+    File.write(File.join(root, 'lib/fake/sorts/first.rb'), <<~RUBY)
+      module Fake
+        module Sorts
+          module First
+            class << self
+              def call(items)
+                items.first
+              end
+            end
+          end
+        end
+      end
+    RUBY
+    code = <<~RUBY
+      class MyClass
+        def initialize(filter:, sort:, items:)
+          @items = filter.call(items)
+          @first = sort.call(@items)
+        end
+
+        def summary
+          "first: \#{@first.inspect} of \#{@items.length}"
+        end
+      end
+    RUBY
+
+    result = Buttress::Composer.call(code, 'MyClass', 'summary', sources: sources)
+
+    expect(result).to include(
+      'MyClass.new(filter: Fake::Filters::None, sort: Fake::Sorts::First, ' \
+      'items: [])',
+    )
+    expect(result).to include("expect(my_class.summary).to eq('first: nil of 0')")
+  end
+
   it 'lets the composer evaluate class methods from sibling files' do
     File.write(File.join(root, 'lib/fake/builder.rb'), <<~RUBY)
       module Fake

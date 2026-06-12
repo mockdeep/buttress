@@ -89,14 +89,24 @@ The CLI takes `'ClassName#method'` for one method (rendered with
   `solvable? == false` rather than raising.
 - `Condition` orchestrates a path concolically: solve argument bindings
   from predicates, then replay the path's steps in execution order —
-  evaluating statements and concretely checking each predicate against
-  the environment at its branch point. When the default-input replay
-  fails on a branch, a tier-2 search retries with mutated inputs —
-  constructor candidates harvested from literals the class compares
-  against, crossed with argument-type alternatives (a synthesized
-  `other` instance vs the plain string default), budget-capped. The
-  replay is the oracle, so a found assignment is verified by
-  construction. Outcomes: branch matches →
+  evaluating statements, concretely checking each predicate against
+  the environment at its branch point, and computing the path's return
+  value. When the default-input replay takes a branch the wrong way, a
+  tier-2 search retries with mutated inputs — constructor candidates
+  harvested from literals the class compares against, crossed with
+  argument-type alternatives (a synthesized `other` instance vs the
+  plain string default), budget-capped. When the replay *cannot
+  evaluate* — a default doesn't answer a method the path needs — a
+  failure-driven repair search (tier-2b) swaps in values that do:
+  project classes and modules defining the missing method (via
+  `Sources#definers_of`; singleton definers as the constant itself,
+  instance definers as synthesized instances) plus core containers
+  ([] / {}). Targeting is precise because `CannotEvaluate` carries its
+  receiver and generated defaults are unique per parameter, so the
+  failing value names the input it came from; the search is
+  depth-first, affinity-ranked (`filter:` prefers `Filters::*`), and
+  shares the attempt budget. The replay is the oracle, so a found
+  assignment is verified by construction. Outcomes: branch matches →
   concrete test; no inputs found → skip ("cannot satisfy");
   evaluation fails → skip ("cannot yet evaluate"). See
   `Condition#solution` and `#compute_skip_reason`.
@@ -107,9 +117,13 @@ The CLI takes `'ClassName#method'` for one method (rendered with
   `ClassNode#lookup_constant`; unresolvable ones become
   `Buttress::ClassReference` — a symbolic value supporting equality and
   rendering (textual path comparison, by design). A send *on* a
-  ClassReference resolves the class (same file, then `Sources`) and
-  interprets its singleton method in a fresh evaluator scoped to that
-  class, sharing the recursion depth budget. A send on a
+  ClassReference resolves the class or module (same file, then
+  `Sources`) and interprets its singleton method in a fresh evaluator
+  scoped to it, sharing the recursion depth budget. `new` with no
+  singleton def constructs an interpreted instance by running the
+  class's initialize; without an initialize to interpret, construction
+  is only provable for an argless class with no Data members and no
+  declared superclass. A send on a
   `Buttress::InstanceValue` (an interpreted instance: constructor
   inputs + ivars, rendered as its own constructor call) dispatches the
   same way, in a child evaluator seeded with that instance's state.
@@ -171,6 +185,12 @@ table to the previous run.
   `flow.skip_reason` (which forces full evaluation) before
   `flow.constructor_call` (which renders the attributes evaluation
   touched). Keep that order.
+- **The return value is computed once, inside `Condition#attempt`,**
+  and carried on the Attempt struct. Never re-evaluate the return node
+  at render time: a mutating return expression (`@list << x`) would
+  mutate twice and assert a wrong value. Computing it in the attempt
+  is also what lets the tier-2 searches reject candidates whose return
+  value can't evaluate.
 - **Tests:** `bundle exec rspec`. Composer specs are golden-master style:
   heredoc Ruby in, exact heredoc spec out — add one per new capability.
   Unit specs build AST nodes by hand (see evaluator/predicate specs for
