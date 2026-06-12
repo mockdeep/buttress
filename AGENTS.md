@@ -57,7 +57,8 @@ exe/buttress → Runner → Loader (reads file)
                       → Schema.from_file (walks up for db/schema.rb)
                       → Sources.from_file (walks up to Gemfile/.git root;
                                            indexes lib/ + app/ classes,
-                                           modules, superclass declarations)
+                                           modules, superclass declarations,
+                                           public method definers)
                       → Composer
                           Target#parse           parser-gem AST
                           RootNode/ClassNode/ModuleNode/MethodNode   node wrappers
@@ -160,10 +161,13 @@ skip reasons ranked by frequency, and crashes. How to read it:
   "cannot evaluate: String#call" once constants resolved — evaluation
   got further and found the real wall). Compare skip *reasons* across
   runs, not just the rate.
-- **Distinguish capability gaps from genuine limits.** Methods that
-  depend on injected collaborators (e.g. calling `.call` on a
-  constructor argument) are out of reach for static analysis by design —
-  don't chase those buckets.
+- **Distinguish capability gaps from genuine limits.** Injected
+  collaborators are reachable when the project itself defines them —
+  the tier-2b repair search substitutes project classes/modules for
+  defaults that don't answer a needed method. The genuine limits are
+  collaborators that only exist outside the project (gems, HTTP
+  clients) and branches needing non-empty collections of foreign
+  instances (no collection synthesis yet) — don't chase those buckets.
 - A "cannot satisfy" skip means buttress couldn't *find* inputs steering
   that branch with the current solver, not that the branch is
   unreachable. These are future-solver work items.
@@ -198,9 +202,17 @@ table to the previous run.
   it against the real fixture class; clean up after.
 - **`InstanceValue` holds only plain values** (class path string,
   constructor inputs, ivars) — never AST nodes or node wrappers. The
-  replay deep-dups bindings with Marshal; anything unmarshalable in a
-  value type breaks every path it appears on. Classes re-resolve by
-  name at dispatch time instead.
+  replay deep-dups bindings with Marshal; an unmarshalable value (an
+  Enumerator, say) degrades the path to a skip at the deep-dup
+  boundary, and instance synthesis validates captured ivars up front
+  so it can fall back to a plain default instead. Classes re-resolve
+  by name at dispatch time.
+- **Generated argument defaults (`'blah1'`, `'blah2'`…) are unique per
+  position within a signature** (`ArgumentNode#value`), and the repair
+  search depends on that: `CannotEvaluate` carries its receiver, and
+  value equality with a parameter's current default is what traces a
+  failure back to the input it came from. Collapsing defaults to a
+  shared value would silently widen repair targeting to a fanout.
 - **Never whitelist `hash` or `object_id`** (or anything else
   process-seeded): the host-computed value differs run to run, so the
   generated assertion would be flaky-wrong. `String#hash` skips are
