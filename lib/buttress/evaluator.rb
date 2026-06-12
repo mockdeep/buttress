@@ -89,7 +89,8 @@ module Buttress
       # FrozenError on the host — degrading, just as the target would
       # fail.
       Array => %i[
-        + - * & | == != nil? [] << push concat length size empty? first
+        + - * & | == != nil? [] << push pop shift unshift concat
+        length size empty? first
         last fetch reverse sort min max any? all? none? one?
         sum uniq compact flatten include? index join slice take drop
         map each_slice to_a inspect freeze

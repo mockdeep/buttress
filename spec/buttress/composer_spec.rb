@@ -2484,4 +2484,143 @@ RSpec.describe Buttress::Composer, '#call' do
     result = described_class.call(code, 'MyClass', 'counter', singleton: true)
     expect(result).to eq(expected_tests)
   end
+
+  it 'splits a return-position && by short-circuit semantics' do
+    code = <<~RUBY
+      class Tag
+        attr_reader :tag_name
+
+        def initialize(tag_name)
+          @tag_name = tag_name
+        end
+
+        def ==(other)
+          other.respond_to?(:tag_name) && tag_name == other.tag_name
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe Tag, '#==' do
+        it 'returns other.respond_to?(:tag_name) when !(other.respond_to?(:tag_name))' do
+          tag = Tag.new('blah1')
+
+          expect(tag.==('blah2')).to eq(false)
+        end
+
+        it 'returns tag_name == other.tag_name when other.respond_to?(:tag_name)' do
+          tag = Tag.new('blah1')
+
+          expect(tag.==(Tag.new('blah1'))).to eq(true)
+        end
+
+        it 'returns tag_name == other.tag_name (false) when other.respond_to?(:tag_name)' do
+          tag = Tag.new('')
+
+          expect(tag.==(Tag.new('blah1'))).to eq(false)
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'Tag', '==')).to eq(expected_tests)
+  end
+
+  it 'splits a return-position || into its fallback paths' do
+    code = <<~RUBY
+      class MyClass
+        def pick(label)
+          label || 'none'
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe MyClass, '#pick' do
+        it 'returns label when label is true' do
+          my_class = MyClass.new
+
+          expect(my_class.pick(true)).to eq(true)
+        end
+
+        it 'returns "none" when label is false' do
+          my_class = MyClass.new
+
+          expect(my_class.pick(false)).to eq('none')
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'pick')).to eq(expected_tests)
+  end
+
+  it 'decomposes a boolean chain one deciding operand per path' do
+    code = <<~RUBY
+      class MyClass
+        def valid(a, b, c)
+          a && b && c
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe MyClass, '#valid' do
+        it 'returns a when a is false' do
+          my_class = MyClass.new
+
+          expect(my_class.valid(false, 'blah2', 'blah3')).to eq(false)
+        end
+
+        it 'returns b when a is true and b is false' do
+          my_class = MyClass.new
+
+          expect(my_class.valid(true, false, 'blah3')).to eq(false)
+        end
+
+        it 'returns c when a is true and b is true' do
+          my_class = MyClass.new
+
+          expect(my_class.valid(true, true, 'blah3')).to eq('blah3')
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'valid')).to eq(expected_tests)
+  end
+
+  it 'asserts the value the short-circuit check saw, not a re-evaluation' do
+    code = <<~RUBY
+      class Queue
+        attr_reader :items
+
+        def initialize(items)
+          @items = items
+        end
+
+        def take
+          items.shift || 'all done'
+        end
+      end
+    RUBY
+
+    # items.shift is both the checked operand and the returned value;
+    # evaluating it twice would shift twice and assert nil — the wrong
+    # value for a method the test runs once.
+    expected_tests = <<~RUBY
+      RSpec.describe Queue, '#take' do
+        it 'returns items.shift when items.shift' do
+          queue = Queue.new(["item1"])
+
+          expect(queue.take).to eq('item1')
+        end
+
+        it 'returns "all done" when !(items.shift)' do
+          queue = Queue.new([])
+
+          expect(queue.take).to eq('all done')
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'Queue', 'take')).to eq(expected_tests)
+  end
 end

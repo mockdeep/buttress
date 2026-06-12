@@ -46,10 +46,87 @@ module Buttress
         subject, *whens, else_body = stmt.children
         case_paths(subject, whens, else_body, rest, steps)
       when :return
-        [Path.new(steps, stmt.children.first)]
+        return_paths(stmt.children.first, steps)
       else
-        rest.empty? ? [Path.new(steps, stmt)] : walk(rest, steps + [stmt])
+        rest.empty? ? return_paths(stmt, steps) : walk(rest, steps + [stmt])
       end
+    end
+
+    # Splits a return-position && / || by short-circuit semantics: each
+    # operand that can decide the expression's value gets its own path,
+    # ending with a polarity predicate on that operand and the operand
+    # itself as the return node (the replay reuses the predicate's
+    # value rather than evaluating the node twice — see
+    # Condition#return_value_for). The last operand is returned
+    # unconstrained: a guard idiom's right side (x && x.name) is a
+    # value, not a branch, and a comparison-family right side gets its
+    # outcomes from tier-3b.
+    def return_paths(node, steps)
+      inner = strip(node)
+      unless inner.is_a?(Parser::AST::Node) && %i[and or].include?(inner.type)
+        return [Path.new(steps, node)]
+      end
+
+      left, right = inner.children
+      if inner.type == :and
+        deciding_paths(left, false, steps) +
+          passing_steps(left, true, steps)
+            .flat_map { |passed| return_paths(right, passed) }
+      else
+        deciding_paths(left, true, steps) +
+          passing_steps(left, false, steps)
+            .flat_map { |passed| return_paths(right, passed) }
+      end
+    end
+
+    # Paths where `node` evaluates with the given truthiness and its
+    # value is what the enclosing expression returns.
+    def deciding_paths(node, polarity, steps)
+      node = strip(node)
+      case node.type
+      when :and
+        left, right = node.children
+        compound = passing_steps(left, true, steps)
+          .flat_map { |passed| deciding_paths(right, polarity, passed) }
+        polarity ? compound : deciding_paths(left, false, steps) + compound
+      when :or
+        left, right = node.children
+        compound = passing_steps(left, false, steps)
+          .flat_map { |passed| deciding_paths(right, polarity, passed) }
+        polarity ? deciding_paths(left, true, steps) + compound : compound
+      else
+        [Path.new(with(steps, node, polarity), node)]
+      end
+    end
+
+    # Step lists after which `node` has evaluated with the given
+    # truthiness without deciding the enclosing expression's value.
+    def passing_steps(node, polarity, steps)
+      node = strip(node)
+      case node.type
+      when :and
+        left, right = node.children
+        compound = passing_steps(left, true, steps)
+          .flat_map { |passed| passing_steps(right, polarity, passed) }
+        polarity ? compound : passing_steps(left, false, steps) + compound
+      when :or
+        left, right = node.children
+        compound = passing_steps(left, false, steps)
+          .flat_map { |passed| passing_steps(right, polarity, passed) }
+        polarity ? passing_steps(left, true, steps) + compound : compound
+      else
+        [with(steps, node, polarity)]
+      end
+    end
+
+    # Unwraps parenthesized expressions: (a && b) parses as a begin
+    # node around the operator.
+    def strip(node)
+      while node.is_a?(Parser::AST::Node) && node.type == :begin &&
+            node.children.size == 1
+        node = node.children.first
+      end
+      node
     end
 
     # Splits a branch condition into paths, decomposing && and || by

@@ -282,6 +282,11 @@ class Condition
 
     node = path.return_node
     return [] unless node.is_a?(Parser::AST::Node) && node.type == :send
+    # A return node that is itself a checked predicate has its polarity
+    # pinned (a short-circuit return path) — the other outcome is
+    # unreachable by construction, so searching for it would only burn
+    # the budget.
+    return [] if path.predicates.any? { |predicate| predicate.node.equal?(node) }
 
     selector = node.children[1]
     return ORDERING_OUTCOMES if selector == :<=>
@@ -893,13 +898,21 @@ class Condition
   def attempt(positional, keywords, binding_overrides: {})
     evaluator = build_evaluator(positional, keywords)
     bindings = build_bindings(evaluator, binding_overrides)
-    env = replay(evaluator, deep_dup(bindings))
-    value = return_value_for(evaluator, env)
+    env = deep_dup(bindings)
+    predicate_values = replay(evaluator, env)
+    value = return_value_for(evaluator, env, predicate_values)
     Attempt.new(evaluator, bindings, env, positional, keywords, value)
   end
 
-  def return_value_for(evaluator, env)
-    evaluator.call(path.return_node || nil_node, env)
+  # A short-circuit return path ends with a predicate on the very node
+  # it returns (see PathEnumerator#return_paths); reusing the value the
+  # polarity check evaluated keeps a mutating operand from running
+  # twice — the test asserts exactly what the check saw.
+  def return_value_for(evaluator, env, predicate_values)
+    node = path.return_node || nil_node
+    return predicate_values[node] if predicate_values.key?(node)
+
+    evaluator.call(node, env)
   rescue Buttress::CannotEvaluate => error
     subject_hash_call(error) || raise
   end
@@ -991,18 +1004,22 @@ class Condition
     nil
   end
 
+  # Replays the path's steps against env (mutated in place), returning
+  # the value each predicate evaluated to, keyed by node identity —
+  # return_value_for reuses these for short-circuit return paths.
   def replay(evaluator, env)
-    path.steps.each_with_object(env) do |step, acc|
+    path.steps.each_with_object({}.compare_by_identity) do |step, values|
       case step
       when Buttress::Predicate
-        taken = evaluator.call(step.node, acc) ? true : false
-        unless taken == step.polarity
+        value = evaluator.call(step.node, env)
+        values[step.node] = value
+        unless (value ? true : false) == step.polarity
           error = Buttress::UnsatisfiablePath.new(step.source)
           error.predicate = step
           raise error
         end
       else
-        evaluator.call(step, acc)
+        evaluator.call(step, env)
       end
     end
   end

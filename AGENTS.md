@@ -111,9 +111,15 @@ echoes the constructor input passed under the same name simply gets
 no test.
 
 - `PathEnumerator` walks a method body into `Path`s, splitting `if`/
-  `unless`/ternary/`case`/`&&`/`||` by short-circuit semantics. Each
-  path's `steps` interleave intermediate statements and predicates in
-  execution order — order is load-bearing for the concolic replay.
+  `unless`/ternary/`case`/`&&`/`||` by short-circuit semantics — in
+  condition position and in return position. A return-position
+  `a && b` yields one path per deciding operand (a polarity predicate
+  on the operand, with the operand itself as the return node); the
+  last operand is returned unconstrained — a guard idiom's right side
+  (`x && x.name`) is a value, not a branch, and a comparison-family
+  right side gets its outcomes from tier-3b. Each path's `steps`
+  interleave intermediate statements and predicates in execution
+  order — order is load-bearing for the concolic replay.
 - `Predicate` classifies branch conditions (truthiness / comparison /
   query on args or receiverless attribute reads) and picks boundary
   values for both polarities. Unsupported forms report
@@ -278,7 +284,12 @@ diff branch and compare assertions instead.
   at render time: a mutating return expression (`@list << x`) would
   mutate twice and assert a wrong value. Computing it in the attempt
   is also what lets the tier-2 searches reject candidates whose return
-  value can't evaluate.
+  value can't evaluate. The same once-only rule holds inside the
+  replay: a short-circuit return path ends with a predicate on the
+  very node it returns, so `return_value_for` reuses the value the
+  polarity check evaluated (keyed by node identity) instead of
+  evaluating the node a second time — `items.shift || default` must
+  assert what the single shift saw.
 - **Tests:** `bundle exec rspec`. Composer specs are golden-master style:
   heredoc Ruby in, exact heredoc spec out — add one per new capability.
   Unit specs build AST nodes by hand (see evaluator/predicate specs for
