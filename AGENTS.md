@@ -132,7 +132,13 @@ no test.
   tier-2 search retries with mutated inputs — constructor candidates
   seeded from literals the class compares against, crossed with
   argument-type alternatives (a synthesized `other` instance vs the
-  plain string default), budget-capped. When the replay *cannot
+  plain string default), budget-capped. Optional constructor keywords
+  are full search citizens: an unpassed kwoptarg silently holds its
+  declared default, so tier-2 offers it overrides, and the
+  tier-3/3b/repair slots report its *evaluated declared default* as
+  the current value (`Condition#declared_keyword_default`) — the
+  mutation base and the receiver-trace key must match what the replay
+  actually saw, not a generated placeholder. When the replay *cannot
   evaluate* — a default doesn't answer a method the path needs — a
   failure-driven search (tier-2b) swaps in values that do:
   project classes and modules defining the missing method (via

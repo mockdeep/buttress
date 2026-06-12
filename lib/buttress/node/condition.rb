@@ -505,12 +505,35 @@ class Condition
     slots += constructor_params
       .select { |param| %i[kwarg kwoptarg].include?(param.type) }
       .map do |param|
-        [:keyword, param.name, param.name,
-         best.constructor_keywords[param.name]]
+        current = best.constructor_keywords
+          .fetch(param.name) { declared_keyword_default(param) }
+        [:keyword, param.name, param.name, current]
       end
     slots + method_node.args
       .select { |param| %i[arg kwarg].include?(param.type) }
       .map { |param| [:binding, param.name, param.name, best.bindings[param.name]] }
+  end
+
+  # The value an unpassed optional keyword actually holds: its declared
+  # default, evaluated through a class-scoped evaluator so constants
+  # resolve. nil when unevaluable — that slot then offers the searches
+  # nothing, and a swap into it is still replay-verified like any other.
+  def declared_keyword_default(param)
+    return nil unless param.type == :kwoptarg
+
+    @declared_keyword_defaults ||= {}
+    return @declared_keyword_defaults[param.name] if
+      @declared_keyword_defaults.key?(param.name)
+
+    @declared_keyword_defaults[param.name] =
+      begin
+        Buttress::Evaluator.new(
+          class_node: class_node, sources: sources,
+          class_path: class_name, target: target,
+        ).call(param.children.last, {})
+      rescue Buttress::CannotEvaluate
+        nil
+      end
   end
 
   def enriched?(value)
@@ -766,9 +789,13 @@ class Condition
   def repair_targets(failure, receiver_class, constructor_overrides,
                      binding_overrides)
     targets = constructor_params
-      .select { |param| %i[arg kwarg].include?(param.type) }
+      .select { |param| %i[arg kwarg kwoptarg].include?(param.type) }
       .map do |param|
-        current = constructor_overrides.fetch(param.name, param.value)
+        current = constructor_overrides.fetch(param.name) do
+          # An unpassed kwoptarg holds its declared default, not a
+          # generated one — value-tracing must match what the replay saw.
+          param.type == :kwoptarg ? declared_keyword_default(param) : param.value
+        end
         [:constructor, param.name, current]
       end
     targets += method_node.args
@@ -826,9 +853,11 @@ class Condition
 
   # Constructor assignments to try: each parameter alone, then pairs,
   # drawing values from the literals the class compares against.
+  # Optional keywords count — an unpassed kwoptarg silently holds its
+  # declared default, which may steer a branch the wrong way.
   def candidate_overrides
     params = constructor_params
-      .select { |param| %i[arg kwarg].include?(param.type) }
+      .select { |param| %i[arg kwarg kwoptarg].include?(param.type) }
       .map(&:name)
     values = seed_literals
     return [] if params.empty? || values.empty?

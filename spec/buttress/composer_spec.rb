@@ -2623,4 +2623,110 @@ RSpec.describe Buttress::Composer, '#call' do
 
     expect(described_class.call(code, 'Queue', 'take')).to eq(expected_tests)
   end
+
+  it 'steers a branch by overriding an optional constructor keyword' do
+    code = <<~RUBY
+      class Task
+        attr_reader :name, :state
+
+        def initialize(name, state: 'open')
+          @name = name
+          @state = state
+        end
+
+        def checked?
+          state == 'complete'
+        end
+
+        def label
+          if checked?
+            "[x] \#{name}"
+          else
+            "[ ] \#{name}"
+          end
+        end
+      end
+    RUBY
+
+    expected_tests = <<~'RUBY'
+      RSpec.describe Task, '#label' do
+        it 'returns "[x] #{name}" when checked? is true' do
+          task = Task.new('blah1', state: 'complete')
+
+          expect(task.label).to eq('[x] blah1')
+        end
+
+        it 'returns "[ ] #{name}" when checked? is false' do
+          task = Task.new('blah1')
+
+          expect(task.label).to eq('[ ] blah1')
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'Task', 'label')).to eq(expected_tests)
+  end
+
+  it 'splits outcomes from an optional keyword via its declared default' do
+    code = <<~RUBY
+      class Task
+        attr_reader :state
+
+        def initialize(name, state: 'open')
+          @name = name
+          @state = state
+        end
+
+        def checked?
+          state == 'complete'
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe Task, '#checked?' do
+        it 'returns state == "complete"' do
+          task = Task.new('blah1')
+
+          expect(task.checked?).to eq(false)
+        end
+
+        it 'returns state == "complete" (true)' do
+          task = Task.new('blah1', state: 'complete')
+
+          expect(task.checked?).to eq(true)
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'Task', 'checked?')).to eq(expected_tests)
+  end
+
+  it 'repairs an optional keyword whose declared default cannot answer' do
+    code = <<~RUBY
+      class Box
+        attr_reader :items
+
+        def initialize(items: nil)
+          @items = items
+        end
+
+        def labels
+          items.map(&:to_s)
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe Box, '#labels' do
+        it 'returns items.map(&:to_s)' do
+          box = Box.new(items: [])
+
+          expect(box.labels).to eq([])
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'Box', 'labels')).to eq(expected_tests)
+  end
 end
