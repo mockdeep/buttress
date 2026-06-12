@@ -40,16 +40,19 @@ Dir.glob(File.join(dir, "**", "*.rb")).sort.each do |file|
 
     stats[:classes] += 1
 
-    class_node.public_method_names.each do |method_name|
+    methods = class_node.public_method_names.map { |name| [name, false] } +
+      class_node.public_singleton_method_names.map { |name| [name, true] }
+    methods.each do |method_name, singleton|
       stats[:methods] += 1
       begin
         output = Buttress::Composer.call(
           code, class_name, method_name.to_s, target: target, sources: sources,
+          singleton: singleton,
         )
       rescue StandardError => error
         stats[:crashed_methods] += 1
         message = "#{error.class}: #{error.message[0, 100]}"
-        crashes[message] << "#{class_name}##{method_name}"
+        crashes[message] << "#{class_name}#{singleton ? '.' : '#'}#{method_name}"
         next
       end
 

@@ -2384,4 +2384,104 @@ RSpec.describe Buttress::Composer, '#call' do
 
     expect(described_class.call(code, 'Builder')).to eq(expected_tests)
   end
+
+  it 'generates specs for singleton methods alongside instance methods' do
+    code = <<~RUBY
+      class MyClass
+        def initialize(name)
+          @name = name
+        end
+
+        def name_tag
+          @name.upcase
+        end
+
+        class << self
+          def default_name
+            'standard'
+          end
+
+          def default
+            new(default_name)
+          end
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe MyClass do
+        describe '#name_tag' do
+          it 'returns @name.upcase' do
+            my_class = MyClass.new('blah1')
+
+            expect(my_class.name_tag).to eq('BLAH1')
+          end
+        end
+
+        describe '.default_name' do
+          it 'returns "standard"' do
+            expect(MyClass.default_name).to eq('standard')
+          end
+        end
+
+        describe '.default' do
+          it 'returns new(default_name)' do
+            expect(MyClass.default).to be_an_instance_of(MyClass)
+          end
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass')).to eq(expected_tests)
+  end
+
+  it 'repairs a singleton method argument and renders the class-level call' do
+    code = <<~RUBY
+      class Item
+        def initialize(name:, pos:)
+          @name = name
+          @pos = pos
+        end
+
+        def self.from_data(rows)
+          rows.map { |row| new(**row) }
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe Item do
+        describe '.from_data' do
+          it 'returns rows.map { |row| new(**row) }' do
+            expect(Item.from_data([])).to eq([])
+          end
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'Item')).to eq(expected_tests)
+  end
+
+  it 'degrades a class-level ivar read to a skip' do
+    code = <<~RUBY
+      class MyClass
+        def self.counter
+          @counter
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe MyClass, '.counter' do
+        it 'returns @counter' do
+          skip 'Buttress cannot yet evaluate: @counter'
+
+          MyClass.counter
+        end
+      end
+    RUBY
+
+    result = described_class.call(code, 'MyClass', 'counter', singleton: true)
+    expect(result).to eq(expected_tests)
+  end
 end

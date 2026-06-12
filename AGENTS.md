@@ -83,15 +83,25 @@ exe/buttress → Runner → Loader (reads file)
 
 `bin/dogfood` builds one `Sources` per project root and reuses it
 across that project's files. `bin/generate DIR` is the batch writer:
-one spec file per class with public instance methods, written to the
-conventional locations; existing files are reported as a collision
-list, never overwritten.
+one spec file per class with public (instance or singleton) methods,
+written to the conventional locations; existing files are reported as
+a collision list, never overwritten.
 
-The CLI takes `'ClassName#method'` for one method (rendered with
-`spec.erb`) or bare `'ClassName'` for every public instance method
-(nested describes via `class_spec.erb`). Both also cover macro
-readers (Data members and attr macros, unshadowed —
-`ClassNode#public_reader_names`): `FlowTree` synthesizes the ivar-read
+The CLI takes `'ClassName#method'` for one instance method or
+`'ClassName.method'` for one singleton method (rendered with
+`spec.erb`), or bare `'ClassName'` for every public instance and
+singleton method (nested describes via `class_spec.erb`). Singleton
+flows have no constructor world — the subject is the class-level call
+(`Klass.from_data(...)`), `Condition#constructor_params` is empty so
+every constructor concern (defaults, search slots, rendering) reduces
+to nothing, and the evaluator runs in singleton mode: receiverless
+sends resolve against the singleton scope through the same
+`invoke_class_method` chokepoint a qualified `Klass.method` send uses
+(sibling singleton defs interpret; a bare `new` constructs an
+instance), and a class-level ivar the replay didn't assign degrades —
+class-body code buttress never executes may have set it, so nil would
+be a guess. Both modes also cover macro readers (Data members and attr
+macros, unshadowed — `ClassNode#public_reader_names`): `FlowTree` synthesizes the ivar-read
 def the macro defines and the standard pipeline solves and renders
 it, so a reader asserts the value the constructor actually computed
 (defaulted keywords, derived members). Reader flows are *filtered*,

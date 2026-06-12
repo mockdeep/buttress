@@ -3,7 +3,7 @@
 <% if tree_index.positive? -%>
 
 <% end -%>
-  describe '#<%= flow_tree.method_name %>' do
+  describe '<%= flow_tree.method_label %>' do
 <% flow_tree.flows.each_with_index do |flow, index| -%>
 <% if index.positive? -%>
 
@@ -12,17 +12,17 @@
 <% if flow.skip_reason -%>
       <%= target.skip(flow.skip_reason) %>
 
+<% end -%>
+<% unless flow.singleton -%>
       <%= flow.instance_name %> = <%= flow.constructor_call %>
 
-      <%= flow.instance_name %>.<%= flow.method_call %>
+<% end -%>
+<% if flow.skip_reason -%>
+      <%= flow.subject %>
 <% elsif flow.type_assertion_class -%>
-      <%= flow.instance_name %> = <%= flow.constructor_call %>
-
-      <%= target.type_assertion("#{flow.instance_name}.#{flow.method_call}", flow.type_assertion_class) %>
+      <%= target.type_assertion(flow.subject, flow.type_assertion_class) %>
 <% else -%>
-      <%= flow.instance_name %> = <%= flow.constructor_call %>
-
-      <%= target.assertion("#{flow.instance_name}.#{flow.method_call}", flow.return_value) %>
+      <%= target.assertion(flow.subject, flow.return_value) %>
 <% end -%>
     end
 <% end -%>

@@ -29,7 +29,9 @@ Dir.glob(File.join(dir, "**", "*.rb")).sort.each do |file|
 
   root.class_names.each do |class_name|
     class_node = root.lookup_class(class_name)
-    next if class_node.nil? || class_node.public_method_names.empty?
+    next if class_node.nil?
+    next if class_node.public_method_names.empty? &&
+            class_node.public_singleton_method_names.empty?
 
     begin
       written << Buttress::Runner.call(file, class_name, target_version)

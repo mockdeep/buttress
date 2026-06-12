@@ -11,12 +11,14 @@ module Buttress
       new.call(*args, **kwargs)
     end
 
-    # With a method name, generates a spec for that one method; without,
-    # generates a spec covering every public instance method.
+    # With a method name, generates a spec for that one method
+    # (singleton: true for a class-level method); without, generates a
+    # spec covering every public instance and singleton method.
     def call(code, class_name, method_name = nil, target: Target.default,
-             schema: nil, sources: nil)
+             schema: nil, sources: nil, singleton: false)
       root_node = RootNode.new(target.parse(code))
-      flow_trees = method_names(root_node, class_name, method_name).map do |name|
+      entries = method_entries(root_node, class_name, method_name, singleton)
+      flow_trees = entries.map do |name, singleton_method|
         FlowTree.new(
           root_node,
           class_name: class_name,
@@ -24,6 +26,7 @@ module Buttress
           target: target,
           schema: schema,
           sources: sources,
+          singleton: singleton_method,
         )
       end
 
@@ -41,11 +44,16 @@ module Buttress
 
     private
 
-    def method_names(root_node, class_name, method_name)
-      return [method_name] if method_name
+    # [name, singleton?] pairs to generate flows for: instance methods
+    # and macro readers, then class-level methods.
+    def method_entries(root_node, class_name, method_name, singleton)
+      return [[method_name, singleton]] if method_name
 
       class_node = root_node.find_class(class_name)
-      class_node.public_method_names + class_node.public_reader_names
+      instance_names =
+        class_node.public_method_names + class_node.public_reader_names
+      instance_names.map { |name| [name, false] } +
+        class_node.public_singleton_method_names.map { |name| [name, true] }
     end
   end
 end

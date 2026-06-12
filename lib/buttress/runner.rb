@@ -6,11 +6,13 @@ module Buttress
 
     def call(path, class_and_method, target_version = nil)
       target = Target.new(target_version)
-      code, class_name, method_name = Loader.call(path, class_and_method)
+      code, class_name, method_name, singleton =
+        Loader.call(path, class_and_method)
       test_code = Composer.call(
         code, class_name, method_name,
         target: target, schema: find_schema(path),
-        sources: Sources.from_file(path, target: target)
+        sources: Sources.from_file(path, target: target),
+        singleton: singleton
       )
       Writer.call(path, test_code)
     end

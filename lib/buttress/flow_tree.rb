@@ -5,7 +5,8 @@ module Buttress
     extend Forwardable
     delegate [:description, :return_value, :skip_reason,
               :type_assertion_class] => :condition
-    delegate [:class_name, :instance_name, :target, :method_name] => :parent
+    delegate [:class_name, :instance_name, :target, :method_name,
+              :singleton] => :parent
 
     def initialize(condition, parent:)
       self.condition = condition
@@ -17,6 +18,13 @@ module Buttress
       return method_name.to_s if arguments.empty?
 
       "#{method_name}(#{arguments.join(', ')})"
+    end
+
+    # The expression under test: a singleton method is called on the
+    # class itself, an instance method on the constructed instance.
+    def subject
+      receiver = singleton ? class_name : instance_name
+      "#{receiver}.#{method_call}"
     end
 
     def constructor_call
@@ -55,25 +63,27 @@ module Buttress
 
   class FlowTree
     attr_accessor :root_node, :class_name, :method_name, :target, :schema,
-                  :sources
+                  :sources, :singleton
 
     extend Forwardable
     delegate [:instance_name] => :class_node
 
     def initialize(root_node, class_name:, method_name:, target:,
-                   schema: nil, sources: nil)
+                   schema: nil, sources: nil, singleton: false)
       self.root_node = root_node
       self.class_name = class_name
       self.method_name = method_name
       self.target = target
       self.schema = schema
       self.sources = sources
+      self.singleton = singleton
     end
 
     def flows
       @flows ||= begin
         conditions = method_node.conditions(
           schema, sources: sources, class_name: class_name, target: target,
+          singleton: singleton,
         )
         conditions = conditions.select(&:informative_reader?) if reader?
         conditions
@@ -82,14 +92,26 @@ module Buttress
       end
     end
 
+    # The describe label: '.method' for a singleton method, '#method'
+    # for an instance method.
+    def method_label
+      "#{singleton ? '.' : '#'}#{method_name}"
+    end
+
     def class_node
       @class_node ||= root_node.find_class(class_name)
     end
 
     def method_node
-      @method_node ||= class_node.lookup_method(method_name) ||
-        reader_method_node ||
-        raise(Buttress::Error, "method not found: ##{method_name}")
+      @method_node ||=
+        if singleton
+          class_node.lookup_singleton_method(method_name) ||
+            raise(Buttress::Error, "method not found: .#{method_name}")
+        else
+          class_node.lookup_method(method_name) ||
+            reader_method_node ||
+            raise(Buttress::Error, "method not found: ##{method_name}")
+        end
     end
 
     private

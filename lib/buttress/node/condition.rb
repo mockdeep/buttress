@@ -20,16 +20,17 @@ class Condition
   )
 
   attr_accessor :method_node, :path, :schema, :sources, :class_name,
-                :target
+                :target, :singleton
 
   def initialize(method_node, path, schema: nil, sources: nil,
-                 class_name: nil, target: nil)
+                 class_name: nil, target: nil, singleton: false)
     self.method_node = method_node
     self.path = path
     self.schema = schema
     self.sources = sources
     self.class_name = class_name
     self.target = target
+    self.singleton = singleton
   end
 
   def description
@@ -913,6 +914,9 @@ class Condition
   # reader body could mutate between the method's read and the
   # assertion's).
   def subject_hash_call(error)
+    # The SubjectCall renders a chain on the constructed instance;
+    # a singleton flow has none.
+    return nil if singleton
     return nil unless error.message.end_with?('#hash')
 
     node = path.return_node
@@ -939,8 +943,9 @@ class Condition
       sources: sources,
       class_path: class_name,
       target: target,
+      singleton: singleton,
     ).tap do |evaluator|
-      unless model?
+      unless model? || singleton
         evaluator.run_initialize(deep_dup(positional), deep_dup(keywords))
       end
     end
@@ -1023,6 +1028,7 @@ class Condition
       class_node: class_node,
       model_attributes: model? ? attribute_store : nil,
       sources: sources,
+      singleton: singleton,
     )
   end
 
@@ -1033,7 +1039,9 @@ class Condition
   def synthesized_instance
     return @synthesized_instance if defined?(@synthesized_instance)
 
-    @synthesized_instance = build_instance
+    # A singleton method's `other` is not the comparison protocol —
+    # there's no instance to be same-class with.
+    @synthesized_instance = singleton ? nil : build_instance
   end
 
   def build_instance(overrides = {})
@@ -1136,7 +1144,12 @@ class Condition
       end
   end
 
+  # A singleton method has no constructor world: the receiver is the
+  # class itself, so every constructor-input concern (defaults,
+  # search slots, rendering) reduces to nothing.
   def constructor_params
+    return [] if singleton
+
     init = class_node.lookup_method(:initialize)
     init ? init.args : []
   end

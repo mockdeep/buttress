@@ -1,9 +1,10 @@
 class MethodNode < BaseNode
-  def conditions(schema = nil, sources: nil, class_name: nil, target: nil)
+  def conditions(schema = nil, sources: nil, class_name: nil, target: nil,
+                 singleton: false)
     Buttress::PathEnumerator.call(children.last).map do |path|
       Condition.new(
         self, path, schema: schema, sources: sources,
-        class_name: class_name, target: target,
+        class_name: class_name, target: target, singleton: singleton,
       )
     end
   end

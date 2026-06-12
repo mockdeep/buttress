@@ -167,16 +167,19 @@ module Buttress
     # (which only knows its basename); target gates the few answers
     # that depend on the analyzed codebase's Ruby version. trace is
     # shared with child evaluators so a replay's observations
-    # accumulate in one place.
+    # accumulate in one place. singleton interprets in class-method
+    # context: self is the class, receiverless sends resolve against
+    # the singleton scope, and ivars are class-level.
     def initialize(class_node: nil, model_attributes: nil, sources: nil,
                    depth: 0, ivars: {}, class_path: nil, target: nil,
-                   trace: nil)
+                   trace: nil, singleton: false)
       @class_node = class_node
       @model_attributes = model_attributes
       @sources = sources
       @ivars = ivars
       @class_path = class_path || class_node&.name
       @target = target
+      @singleton = singleton
       @trace = trace || Trace.new
       @constants = {}
       @modules = {}
@@ -226,6 +229,12 @@ module Buttress
       when :ivar
         # Without an interpreted initialize we can't know instance state.
         raise CannotEvaluate, source(node) unless @class_node
+        # A class-level ivar the replay didn't assign may have been set
+        # by class-body code buttress never executes — nil would be a
+        # guess, not a proof.
+        if @singleton && !@ivars.key?(node.children.first)
+          raise CannotEvaluate, source(node)
+        end
 
         @ivars[node.children.first]
       when :ivasgn
@@ -416,6 +425,7 @@ module Buttress
       evaluator = Evaluator.new(
         class_node: definition, sources: @sources, depth: @depth,
         class_path: reference.path, target: @target, trace: @trace,
+        singleton: true,
       )
       positional, keywords = split_keywords(method, args, arg_nodes)
       evaluator.invoke_method(method, positional, keywords)
@@ -470,6 +480,11 @@ module Buttress
     # member — Data.new raises for missing members, so a partial super
     # degrades rather than fabricating instance state.
     def evaluate_super(node, env)
+      # In a singleton method super targets the superclass's singleton
+      # method — the Data-member assignment below would be the wrong
+      # semantics.
+      raise CannotEvaluate, source(node) if @singleton
+
       members = @class_node&.data_members || []
       raise CannotEvaluate, source(node) if members.empty?
 
@@ -588,6 +603,17 @@ module Buttress
 
     def resolve_send(operator, args, arg_nodes)
       return MISSING unless @class_node
+
+      # In a singleton method self is the class: receiverless sends
+      # resolve against the singleton scope — sibling singleton defs,
+      # and a bare `new` constructing an instance — through the same
+      # chokepoint a qualified Klass.method send uses. Instance-method
+      # lookup below would be the wrong scope entirely.
+      if @singleton
+        return invoke_class_method(
+          ClassReference.new(@class_path), operator, args, arg_nodes,
+        )
+      end
 
       # self.class — def class is not definable, so this can't shadow.
       return ClassReference.new(@class_path) if
