@@ -177,11 +177,20 @@ no test.
   are offered to whatever input slot holds the sought value — the
   assignment that makes a derived-value comparison hold
   (`tag_names.include?(tag_name)` with `tag_name = '<no tag>'`),
-  unreachable by mutating either side blindly. A candidate is kept
-  only when the path still satisfies and the world is strictly richer
-  (`Condition#richer?`): more iterations, or equal iterations with
-  fewer membership misses. A satisfied world is never traded for a
-  failing one. A solved path whose return expression is a
+  unreachable by mutating either side blindly. A block-internal
+  branch that only ever took one polarity (the trace records `:if`
+  polarities by node identity, block-depth-gated — path-level
+  branches are predicates and never reach the evaluator's `:if`)
+  enables the balance move (tier-3d): a second element from the same
+  value pool is appended to an enriched collection slot so both sides
+  run in one world (`next if matching.empty?` with a matching and an
+  emptied Card), accepted only when a branch actually balances — an
+  element that behaves identically raises iterations but balances
+  nothing, which is what keeps worlds minimal. Other candidates are
+  kept only when the path still satisfies and the world is strictly
+  richer (`Condition#richer?`): more iterations, or equal iterations
+  with fewer membership misses. A satisfied world is never traded for
+  a failing one. A solved path whose return expression is a
   comparison-family send (`<=>`, the equality selectors, `?`-query
   sends) additionally splits by outcome (tier-3b): one satisfied
   world witnesses only one point of the return value's domain

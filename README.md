@@ -80,13 +80,24 @@ interpolated expected strings — statically, without running
 ## What it generates
 
 - **One test per execution path**, splitting on `if`/`unless`/
-  ternaries/`case`/`&&`/`||` by their short-circuit semantics.
+  ternaries/`case`/`&&`/`||` by their short-circuit semantics —
+  including booleans in return position, so `a && b` gets a test per
+  deciding operand.
 - **Outcome variants**: a method returning `<=>` gets a test per
   outcome (-1/0/1); equality and `?`-query returns get both
   polarities, when inputs exist that reach them.
+- **Class-level method tests** (`def self.x`, `class << self`),
+  called on the class itself.
 - **Reader tests** for the member values a constructor computes —
   defaulted keywords, derived `Data` members — skipping readers that
   merely echo their input back.
+- **Coordinated collection worlds**: when a path's blocks need data
+  to walk, buttress synthesizes it — nested constructor graphs
+  (a card whose checklists hold a checklist whose items hold an
+  unchecked item), raw keyword hashes for `new(**data)` idioms,
+  inputs set to values observed mid-replay (a filter's tag becomes
+  what the name scan actually yields), and a second collection
+  element when one branch of a block never ran.
 - **ActiveRecord model tests** with attributes parsed from
   `db/schema.rb` (never from a booted app), rendered into
   `Model.new(...)` so the real test takes the same branch.
@@ -98,10 +109,11 @@ interpolated expected strings — statically, without running
 
 ## Usage
 
-Generate a spec for one class or a single method:
+Generate a spec for one class or a single method (`#method` for an
+instance method, `.method` for a class-level one):
 
 ```
-buttress FILE 'ClassName[#method]' [TARGET_RUBY_VERSION]
+buttress FILE 'ClassName[#method|.method]' [TARGET_RUBY_VERSION]
 ```
 
 The spec is written to the conventional location (`lib/foo/bar.rb` →
@@ -145,7 +157,8 @@ path's steps checking every branch condition against the interpreted
 state at that moment. When default inputs take a wrong turn, a family
 of budget-capped searches mutates them — seeded by literals the class
 compares against, project classes that define the methods a failing
-input lacks, and synthesized instances of collaborator classes. The
+input lacks, synthesized collaborator data (instances and nested
+constructor graphs), and values observed during the replay itself. The
 replay is the oracle: a found world is verified by construction.
 
 `AGENTS.md` documents the full architecture and design principles;

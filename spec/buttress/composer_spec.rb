@@ -2901,6 +2901,74 @@ RSpec.describe Buttress::Composer, '#call' do
     expect(described_class.call(code, 'Picker', 'call')).to eq(expected_tests)
   end
 
+  it 'balances a block-internal branch with a second element' do
+    code = <<~RUBY
+      Apple = Data.define(:crate_id, :state)
+
+      class Apple
+        def initialize(crate_id:, state:, **_data)
+          super(crate_id:, state:)
+        end
+
+        def fresh?
+          state != 'rotten'
+        end
+
+        def self.from_data(rows, crate_id:)
+          rows.map { |row| new(crate_id:, **row) }
+        end
+      end
+
+      Crate = Data.define(:id, :apples)
+
+      class Crate
+        def initialize(id:, apples:, **_data)
+          super(id:, apples: build_apples(apples, crate_id: id))
+        end
+
+        private
+
+        def build_apples(apples, crate_id:)
+          return apples if apples.all?(Apple)
+
+          Apple.from_data(apples, crate_id:)
+        end
+      end
+
+      class Sieve
+        def call(crates)
+          crates.each_with_object([]) do |crate, kept|
+            good = crate.apples.select(&:fresh?)
+            next if good.empty?
+
+            kept << crate.with(apples: good)
+          end
+        end
+      end
+    RUBY
+
+    # `next if good.empty?` can take both polarities in one world —
+    # the balance move appends the emptied Crate beside the filled
+    # one, accepted only because a branch actually balances; a second
+    # identical crate would raise iterations but balance nothing.
+    expected_tests = <<~RUBY
+      RSpec.describe Sieve, '#call' do
+        it 'returns crates.each_with_object([]) do |crate, kept|
+            good = crate.apples.select(&:fresh?)
+            next if good.empty?
+
+            kept << crate.with(apples: good)
+          end' do
+          sieve = Sieve.new
+
+          expect(sieve.call([Crate.new(id: 'blah1', apples: [{crate_id: "blah1", state: "blah2"}]), Crate.new(id: 'blah1', apples: [])])).to eq([Crate.new(id: 'blah1', apples: [Apple.new(crate_id: 'blah1', state: 'blah2')])])
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'Sieve', 'call')).to eq(expected_tests)
+  end
+
   it 'refuses a class spec when every flow filters away' do
     code = <<~RUBY
       MyClass = Data.define(:id, :name)

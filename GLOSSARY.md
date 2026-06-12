@@ -16,7 +16,11 @@ reading.
   and the one where it didn't. Buttress generates one test per path
   (plus outcome variants — see tier-3b). `PathEnumerator` finds the
   paths by splitting on `if`/`unless`/ternary/`case`/`&&`/`||`,
-  honoring short-circuit rules.
+  honoring short-circuit rules — in condition position and in return
+  position: `a && b` as a return value yields one path per deciding
+  operand, with the operand itself as the return node (the replay
+  reuses the value the polarity check saw, so a mutating operand like
+  `items.shift` runs exactly once).
 - **steps** — everything that happens along a path, in the order it
   happens: ordinary statements interleaved with branch conditions. The
   order matters because the replay walks the steps in sequence,
@@ -96,11 +100,11 @@ reading.
   directly. Lives in `Predicate`.
 - **tier-2** — guess-and-check, for when the condition tests something
   the caller doesn't directly control — usually instance state.
-  Buttress builds variations of the constructor inputs (values drawn
-  from constant seeding, crossed with alternative argument types),
-  replays each, and keeps the first where every branch goes the right
-  way. Capped by the search budget. Buttress's slice of search-based
-  software testing (SBST).
+  Buttress builds variations of the constructor inputs, optional
+  keywords included (values drawn from constant seeding, crossed with
+  alternative argument types), replays each, and keeps the first
+  where every branch goes the right way. Capped by the search budget.
+  Buttress's slice of search-based software testing (SBST).
 - **tier-2b** — the repair search, for when the replay can't even
   *finish*: some default input doesn't answer a method the path calls
   (the placeholder string `'blah1'` has no `#filter`, say). The failure
@@ -121,12 +125,42 @@ reading.
 - **tier-3** / **enrichment** — the polish pass. A satisfied world can
   still be hollow: if every block on the path looped over an empty
   collection, the test passes while exercising almost nothing (see
-  vacuous world). Enrichment retries with one collection input swapped
-  for a one-element collection of a synthesized project instance
-  (`cards` → one `Card`), keeping the swap only when the path still
-  holds and the blocks actually ran more. A working world is never
-  traded for a broken one. A hill climb, with the trace's iteration
-  count as the fitness function.
+  vacuous world). Enrichment retries with one collection input
+  swapped for a one-element collection, richest candidate first: a
+  raw-data hash (recursively filled, so nested collections walk too),
+  a filled instance, a plain synthesized instance (`cards` → one
+  `Card`), an emptied variant. A swap is kept only when the path
+  still holds and the world got richer. A working world is never
+  traded for a broken one. A hill climb, with the trace as the
+  fitness function (`Condition#richer?`).
+- **raw-data hash** — the constructor-keyword shape of a class as the
+  `from_data` idiom consumes it: required keywords with generated
+  defaults, splatted into `new(**data)`. `constructor_keyword_hash`
+  builds them recursively to `FILL_DEPTH`: a plural-named keyword
+  slot whose element class resolves gets a one-element array of that
+  class's own raw-data hash, so a Card's checklists hold a checklist
+  whose check_items hold an item.
+- **consumer hint** — the second way an element class resolves, where
+  name affinity can't: the owner's initialize body passes the
+  parameter to a constant (`ChecklistItem.from_data(check_items, …)`),
+  naming the element class at the call site.
+- **tier-3c** / **cross-pollination** — the move for derived-value
+  comparisons. The replay records every membership test that came up
+  empty (`tag_names.include?(tag_name)` → false), and each member of
+  the observed collection becomes a candidate for whatever input slot
+  holds the sought value — `tag_name` can simply become what the name
+  scan yields (`'<no tag>'`). No blind mutation of either side could
+  find that: one side derives from the other input. Dynamic seeding,
+  pointed at a comparison.
+- **tier-3d** / **balance move** — the move for block-internal
+  branches. A branch inside a block can take both polarities in one
+  world (different iterations) — unlike a path-level branch, which
+  the path pins. The trace records block `:if` polarities by node;
+  one that only ever went one way gets a second, behaviorally
+  different element appended to an enriched collection slot
+  (`next if matching.empty?` with a matching and an emptied Card),
+  accepted only when a branch actually balances — which is what keeps
+  worlds minimal.
 - **tier-3b** / **outcome splitting** — extra tests for methods whose
   return value has a small menu of possible answers: `<=>` returns
   -1/0/1, equality and `?`-query methods return true/false. One world
@@ -189,9 +223,11 @@ name at the moment they're needed.
   hash seed changes every run), but `expect(x.hash).to eq(x.id.hash)`
   works, because both sides run in the same process and the seed
   cancels out.
-- **`Trace`** — the replay's diary of block activity: how many times
-  blocks iterated, shared across one replay. What makes vacuous worlds
-  detectable.
+- **`Trace`** — the replay's diary, shared across one replay: how many
+  times blocks iterated (Enumerator-wrapped walks included), whether
+  any walked an empty collection (vacuity), which membership tests
+  came up empty (tier-3c's input), and which block-internal branches
+  took which polarities (tier-3d's input). The searches' fitness data.
 
 ## Evaluation and sandboxing
 
@@ -260,14 +296,25 @@ name at the moment they're needed.
   actually computed (a defaulted keyword, a derived member). Reader
   flows are filtered rather than skipped: an unsolvable or echoing
   one gets no test — a reader is not a source path.
+- **singleton flow** — a test for a class-level method (`def self.x`,
+  `class << self`), written `'ClassName.method'`. There is no
+  constructor world: the subject is the class-level call, and the
+  evaluator runs in singleton mode — receiverless sends resolve
+  against the singleton scope, a bare `new` constructs an instance,
+  and an unset class-level ivar degrades (class-body code buttress
+  never executes may have set it).
 - **Flow / FlowTree** — what the templates see
   (`lib/buttress/flow_tree.rb`). A `Flow` wraps a `Condition` with
-  rendering helpers (`method_call`, `constructor_call`), and the
-  templates speak in flows (`flow.skip_reason`); `FlowTree` collects
-  the flows for a class or method.
+  rendering helpers (`method_call`, `constructor_call`, `subject`),
+  and the templates speak in flows (`flow.skip_reason`); `FlowTree`
+  collects the flows for a class or method.
 - **collision list** — `bin/generate`'s answer to "this spec file
   already exists": report it in a list and move on. Existing files are
   never overwritten.
+- **nothing to assert** — `bin/generate`'s answer to a class whose
+  flows all filter away (a reader-only Data class where every member
+  echoes its input): report it rather than write an empty describe
+  shell.
 
 ## Host vs target
 
@@ -311,6 +358,12 @@ for.
   its hand-written ones, run its suite, and diff. Every assertion the
   hand-written specs make that the generated ones don't is a capability
   gap, ranked by evidence.
+- **phase-3 metric** — what to do when the assertion diff runs dry
+  too: run only the generated spec files under SimpleCov and read
+  per-file line/branch coverage. Every dark line is a world the
+  searches couldn't construct, named by exact line number — the
+  sharpest instrument, and the one serving the project's north star
+  (100% coverage of a target project from generated specs alone).
 - **golden-master composer spec** — the composer test style: a heredoc
   of Ruby in, the exact heredoc of the expected spec out. One per new
   capability. "Golden master" is the industry term for asserting
@@ -338,7 +391,12 @@ concept and the buttress term(s) that descend from it.
   typed exception).
 - **hill climbing / fitness function** — local search that accepts only
   strictly improving steps, scored by a fitness measure. → *tier-3*
-  enrichment (fitness = the trace's block-iteration count).
+  enrichment (fitness = the trace: iterations, membership misses,
+  balanced branches).
+- **dynamic seeding** — extending the seed pool with values observed
+  during execution rather than mined statically (Fraser & Arcuri).
+  → *tier-3c* cross-pollination (the observed collection's members
+  seed the compared input's candidates).
 - **output coverage** — covering the domain of a program's outputs
   rather than only its branches. → *tier-3b* outcome splitting.
 - **test oracle** — the mechanism that decides whether observed

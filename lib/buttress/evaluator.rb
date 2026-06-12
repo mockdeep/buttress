@@ -52,6 +52,41 @@ module Buttress
     def membership_miss!(collection, sought)
       @membership_misses << [collection.dup, sought]
     end
+
+    # --- Block-internal branch polarities. ---
+    # A branch inside a block can take both polarities in one world
+    # (different iterations), unlike a path-level branch, which the
+    # path's predicates pin. A node that only ever went one way is the
+    # balance signal: a second, behaviorally different collection
+    # element could run the other side.
+
+    def enter_block!
+      @block_depth = (@block_depth || 0) + 1
+    end
+
+    def exit_block!
+      @block_depth -= 1
+    end
+
+    def branch!(node, polarity)
+      return unless (@block_depth || 0).positive?
+
+      @block_branches ||= {}.compare_by_identity
+      (@block_branches[node] ||= []) << polarity
+      @block_branches[node].uniq!
+    end
+
+    def balanced_branches
+      branches.count { |_node, polarities| polarities.size == 2 }
+    end
+
+    def unbalanced_branches?
+      branches.any? { |_node, polarities| polarities.size == 1 }
+    end
+
+    def branches
+      @block_branches || {}
+    end
   end
 
   # Statically evaluates an expression node against an environment of
@@ -324,7 +359,9 @@ module Buttress
         call(left, env) || call(right, env)
       when :if
         condition, then_branch, else_branch = node.children
-        branch = call(condition, env) ? then_branch : else_branch
+        taken = call(condition, env) ? true : false
+        @trace.branch!(node, taken)
+        branch = taken ? then_branch : else_branch
         branch && call(branch, env)
       when :irange, :erange
         low, high = node.children.map { |child| child && call(child, env) }
@@ -618,7 +655,12 @@ module Buttress
         receiver.public_send(operator, *args) do |*block_args|
           ran += 1
           @trace.iteration!
-          yield(*block_args)
+          @trace.enter_block!
+          begin
+            yield(*block_args)
+          ensure
+            @trace.exit_block!
+          end
         end
       rescue CannotEvaluate
         raise

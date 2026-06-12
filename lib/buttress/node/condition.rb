@@ -218,7 +218,8 @@ class Condition
   # accepted step consumes a slot, so the climb terminates.
   def enrich(best)
     trace = best.evaluator.trace
-    return best unless trace.vacuous? || trace.membership_misses.any?
+    return best unless trace.vacuous? || trace.membership_misses.any? ||
+                       trace.unbalanced_branches?
 
     @search_attempts ||= 0
     improved = enrichment_step(best)
@@ -229,16 +230,25 @@ class Condition
     candidates =
       enrichment_candidates(best) + cross_pollination_candidates(best)
     candidates.each do |positional, keywords, bindings|
-      return nil if @search_attempts >= SEARCH_BUDGET
-
-      @search_attempts += 1
-      begin
-        candidate = attempt(positional, keywords, binding_overrides: bindings)
-      rescue Buttress::CannotEvaluate, Buttress::UnsatisfiablePath
-        next
-      end
-      return candidate if richer?(candidate, best)
+      candidate = try_candidate(positional, keywords, bindings)
+      return nil if candidate == :budget
+      return candidate if candidate && richer?(candidate, best)
     end
+
+    balance_candidates(best).each do |positional, keywords, bindings|
+      candidate = try_candidate(positional, keywords, bindings)
+      return nil if candidate == :budget
+      return candidate if candidate && balancing?(candidate, best)
+    end
+    nil
+  end
+
+  def try_candidate(positional, keywords, bindings)
+    return :budget if @search_attempts >= SEARCH_BUDGET
+
+    @search_attempts += 1
+    attempt(positional, keywords, binding_overrides: bindings)
+  rescue Buttress::CannotEvaluate, Buttress::UnsatisfiablePath
     nil
   end
 
@@ -254,6 +264,37 @@ class Condition
     candidate_trace.iterations == best_trace.iterations &&
       candidate_trace.membership_misses.size <
         best_trace.membership_misses.size
+  end
+
+  # Tier-3d, the balance move: a block-internal branch that only ever
+  # took one polarity gets a second, behaviorally different element
+  # appended to an enriched collection slot — both sides of
+  # `next if matching.empty?` can run in one world (an emptied Card
+  # next to the matching one). Accepted only when a branch actually
+  # balances and nothing else regresses: appending another element
+  # that behaves identically raises iterations but balances nothing,
+  # so strict acceptance is what keeps worlds minimal.
+  def balancing?(candidate, best)
+    candidate_trace = candidate.evaluator.trace
+    best_trace = best.evaluator.trace
+    candidate_trace.balanced_branches > best_trace.balanced_branches &&
+      candidate_trace.iterations >= best_trace.iterations &&
+      candidate_trace.membership_misses.size <=
+        best_trace.membership_misses.size
+  end
+
+  # Appends drawn from the same value pool the slot was enriched
+  # from — the emptied variant is the one that usually flips a guard.
+  def balance_candidates(best)
+    return [] unless best.evaluator.trace.unbalanced_branches?
+
+    enrichment_slots(best).flat_map do |kind, name, key, current|
+      next [] unless enriched?(current)
+
+      enrichment_values(name).map do |addition|
+        swap_slot(best, kind, name, key, current + addition)
+      end
+    end
   end
 
   # Tier-3c, the cross-pollination move: a membership test that came
