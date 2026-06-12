@@ -65,6 +65,11 @@ module Buttress
       (names || []).to_a
     end
 
+    # Qualified paths of every class the project defines.
+    def class_paths
+      class_index.keys
+    end
+
     # Whether exactly one indexed class has this basename. Unqualified
     # references are only trustworthy when the answer is unambiguous.
     def unique_class_basename?(basename)

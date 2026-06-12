@@ -131,11 +131,133 @@ class Condition
   end
 
   def solve
+    enrich(base_solution)
+  end
+
+  def base_solution
     attempt(*default_constructor_inputs)
   rescue Buttress::UnsatisfiablePath => error
     search_inputs || failure_search(error) || raise(error)
   rescue Buttress::CannotEvaluate => error
     failure_search(error) || raise(error)
+  end
+
+  # Tier-3: a satisfied world can still be degenerate — blocks along
+  # the path walked empty collections zero times, so the test would
+  # assert only the vacuous outcome. Enrichment hill-climbs: swap one
+  # collection-shaped input for a one-element collection of a
+  # synthesized project instance (matched by name affinity: cards ->
+  # Card), keeping the world only when the path still satisfies and
+  # strictly more block iterations ran. The replay stays the oracle —
+  # a satisfied world is never traded for a failing one, and each
+  # accepted step consumes a slot, so the climb terminates.
+  def enrich(best)
+    return best unless best.evaluator.trace.vacuous?
+
+    @search_attempts ||= 0
+    improved = enrichment_step(best)
+    improved ? enrich(improved) : best
+  end
+
+  def enrichment_step(best)
+    enrichment_candidates(best).each do |positional, keywords, bindings|
+      return nil if @search_attempts >= ATTEMPT_BUDGET
+
+      @search_attempts += 1
+      begin
+        candidate = attempt(positional, keywords, binding_overrides: bindings)
+      rescue Buttress::CannotEvaluate, Buttress::UnsatisfiablePath
+        next
+      end
+      return candidate if candidate.evaluator.trace.iterations >
+                          best.evaluator.trace.iterations
+    end
+    nil
+  end
+
+  # One-swap variants of the solved world: each constructor parameter
+  # and method argument whose name echoes a project class gets a
+  # one-element collection of that class's synthesized instance.
+  # Already-enriched slots are skipped, which is what bounds the climb.
+  def enrichment_candidates(best)
+    enrichment_slots(best).flat_map do |kind, name, key, current|
+      next [] if enriched?(current)
+
+      enrichment_values(name).map do |value|
+        case kind
+        when :positional
+          swapped = best.constructor_positional.dup
+          swapped[key] = value
+          [swapped, best.constructor_keywords, best.bindings]
+        when :keyword
+          [best.constructor_positional,
+           best.constructor_keywords.merge(name => value), best.bindings]
+        when :binding
+          [best.constructor_positional, best.constructor_keywords,
+           best.bindings.merge(name => value)]
+        end
+      end
+    end
+  end
+
+  def enrichment_slots(best)
+    positional_params = constructor_params.select { |p| p.type == :arg }
+    slots = positional_params.each_with_index.map do |param, index|
+      [:positional, param.name, index, best.constructor_positional[index]]
+    end
+    slots += constructor_params
+      .select { |param| %i[kwarg kwoptarg].include?(param.type) }
+      .map do |param|
+        [:keyword, param.name, param.name,
+         best.constructor_keywords[param.name]]
+      end
+    slots + method_node.args
+      .select { |param| %i[arg kwarg].include?(param.type) }
+      .map { |param| [:binding, param.name, param.name, best.bindings[param.name]] }
+  end
+
+  def enriched?(value)
+    value.is_a?(Array) &&
+      value.any? { |element| element.is_a?(Buttress::InstanceValue) }
+  end
+
+  # Synthesized one-element collections for a slot, drawn from project
+  # classes whose name echoes the slot's: the plain default-input
+  # instance, and a variant with its own collection-named inputs
+  # emptied (a Card whose checklists: [] constructs even when the
+  # default string would not).
+  def enrichment_values(name)
+    candidate_class_paths
+      .select { |path| name_echoes?(name, path) }
+      .flat_map do |path|
+        [foreign_instance(path), emptied_collections_instance(path)]
+      end
+      .compact
+      .map { |instance| [instance] }
+  end
+
+  def candidate_class_paths
+    @candidate_class_paths ||=
+      ((sources&.class_paths || []) + class_node.parent_node.class_names)
+      .uniq
+  end
+
+  def emptied_collections_instance(path)
+    init = resolve_foreign_class(path)&.lookup_method(:initialize)
+    return nil unless init
+
+    overrides = init.args
+      .select { |param| %i[arg kwarg].include?(param.type) }
+      .select { |param| collection_named?(param.name) }
+      .to_h { |param| [param.name, []] }
+    return nil if overrides.empty?
+
+    foreign_instance(path, overrides)
+  end
+
+  def collection_named?(name)
+    name.to_s.end_with?('s') &&
+      candidate_class_paths.any? { |path| name_echoes?(name, path) }
   end
 
   # Tier-2: retries the replay with mutated inputs, looking for values
@@ -305,26 +427,36 @@ class Condition
   end
 
   # An interpreted instance of another project class, built from
-  # default constructor inputs the same way the class under test is.
-  def foreign_instance(path)
-    foreign = sources.find_class(path)
+  # default constructor inputs the same way the class under test is
+  # (with optional per-parameter overrides).
+  def foreign_instance(path, overrides = {})
+    foreign = resolve_foreign_class(path)
     init = foreign&.lookup_method(:initialize)
     return nil unless init
 
-    positional = init.args.select { |param| param.type == :arg }.map(&:value)
+    positional = init.args
+      .select { |param| param.type == :arg }
+      .map { |param| overrides.fetch(param.name, param.value) }
     keywords = init.args
       .select { |param| param.type == :kwarg }
-      .to_h { |param| [param.name, param.value] }
+      .to_h { |param| [param.name, overrides.fetch(param.name, param.value)] }
     evaluator = Buttress::Evaluator.new(
       class_node: foreign, sources: sources, class_path: path, target: target,
     )
-    evaluator.run_initialize(positional.dup, keywords.dup)
+    evaluator.run_initialize(deep_dup(positional), deep_dup(keywords))
     Buttress::InstanceValue.new(
       class_path: path, positional: positional, keywords: keywords,
       ivars: deep_dup(evaluator.ivars),
     )
   rescue Buttress::CannotEvaluate
     nil
+  end
+
+  # Sibling classes resolve through Sources; classes defined in the
+  # analyzed file itself resolve through its own root.
+  def resolve_foreign_class(path)
+    sources&.find_class(path) ||
+      class_node.parent_node.lookup_class(path.split('::').last)
   end
 
   # Parameters the failing receiver could have come from, as
@@ -365,13 +497,14 @@ class Condition
       when Buttress::ClassReference then value.path
       when Buttress::InstanceValue then value.class_path
       end
-    return 0 unless path
+    path && name_echoes?(name, path) ? 1 : 0
+  end
 
+  def name_echoes?(name, path)
     stem = name.to_s.downcase
-    echoes = path.downcase.split('::').any? do |segment|
+    path.downcase.split('::').any? do |segment|
       segment.start_with?(stem) || stem.start_with?(segment)
     end
-    echoes ? 1 : 0
   end
 
   # All candidate worlds: constructor-input mutations crossed with

@@ -2148,4 +2148,40 @@ RSpec.describe Buttress::Composer, '#call' do
 
     expect(described_class.call(code, 'MyClass', 'hash')).to eq(expected_tests)
   end
+
+  it 'enriches a vacuous world with a synthesized collection element' do
+    code = <<~RUBY
+      class Apple
+        attr_reader :label
+
+        def initialize(label)
+          @label = label
+        end
+      end
+
+      class Basket
+        attr_reader :apples
+
+        def initialize(apples: [])
+          @apples = apples
+        end
+
+        def labels
+          apples.map(&:label)
+        end
+      end
+    RUBY
+
+    expected_tests = <<~'RUBY'
+      RSpec.describe Basket, '#labels' do
+        it 'returns apples.map(&:label)' do
+          basket = Basket.new(apples: [Apple.new('blah1')])
+
+          expect(basket.labels).to eq(["blah1"])
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'Basket', 'labels')).to eq(expected_tests)
+  end
 end

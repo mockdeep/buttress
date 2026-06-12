@@ -17,6 +17,32 @@ module Buttress
     end
   end
 
+  # Observations from one evaluation run, shared across every child
+  # evaluator a replay spawns: how many block iterations ran, and
+  # whether any enumeration over an empty collection ran zero times —
+  # a vacuous walk, the signal that a satisfied world may still be
+  # degenerate. Condition's enrichment search reads it.
+  class Trace
+    attr_reader :iterations
+
+    def initialize
+      @iterations = 0
+      @vacuous = false
+    end
+
+    def iteration!
+      @iterations += 1
+    end
+
+    def vacuous!
+      @vacuous = true
+    end
+
+    def vacuous?
+      @vacuous
+    end
+  end
+
   # Statically evaluates an expression node against an environment of
   # variable bindings, without ever executing the code under analysis.
   # Core-type methods are delegated to the host Ruby, but only when they
@@ -64,7 +90,7 @@ module Buttress
       # fail.
       Array => %i[
         + - * & | == != nil? [] << push concat length size empty? first
-        last fetch reverse sort min max any? none? one?
+        last fetch reverse sort min max any? all? none? one?
         sum uniq compact flatten include? index join slice take drop
         map each_slice to_a inspect freeze
       ],
@@ -139,15 +165,19 @@ module Buttress
     # seeds instance state, for dispatching onto an already-built
     # InstanceValue. class_path is the qualified name of class_node
     # (which only knows its basename); target gates the few answers
-    # that depend on the analyzed codebase's Ruby version.
+    # that depend on the analyzed codebase's Ruby version. trace is
+    # shared with child evaluators so a replay's observations
+    # accumulate in one place.
     def initialize(class_node: nil, model_attributes: nil, sources: nil,
-                   depth: 0, ivars: {}, class_path: nil, target: nil)
+                   depth: 0, ivars: {}, class_path: nil, target: nil,
+                   trace: nil)
       @class_node = class_node
       @model_attributes = model_attributes
       @sources = sources
       @ivars = ivars
       @class_path = class_path || class_node&.name
       @target = target
+      @trace = trace || Trace.new
       @constants = {}
       @modules = {}
       @classes = {}
@@ -155,7 +185,7 @@ module Buttress
       @depth = depth
     end
 
-    attr_reader :ivars
+    attr_reader :ivars, :trace
 
     # Interprets the class's initialize method (if any) to populate
     # instance state, using the given argument values.
@@ -333,6 +363,14 @@ module Buttress
       end
 
       receiver = call(receiver_node, env)
+      send_to(receiver, operator, args, arg_nodes)
+    end
+
+    # Dispatch on the receiver's kind: symbolic class references and
+    # interpreted instances route to interpretation, everything else to
+    # the whitelisted host delegation. The single chokepoint for every
+    # concrete send, explicit or block-passed.
+    def send_to(receiver, operator, args, arg_nodes = [])
       if receiver.is_a?(ClassReference)
         result = invoke_class_method(receiver, operator, args, arg_nodes)
         return result unless result.equal?(MISSING)
@@ -355,7 +393,7 @@ module Buttress
       Evaluator.new(
         class_node: class_node, sources: @sources, depth: @depth,
         ivars: instance.ivars, class_path: instance.class_path,
-        target: @target,
+        target: @target, trace: @trace,
       ).dispatch(operator, args, arg_nodes)
     end
 
@@ -377,7 +415,7 @@ module Buttress
 
       evaluator = Evaluator.new(
         class_node: definition, sources: @sources, depth: @depth,
-        class_path: reference.path, target: @target,
+        class_path: reference.path, target: @target, trace: @trace,
       )
       positional, keywords = split_keywords(method, args, arg_nodes)
       evaluator.invoke_method(method, positional, keywords)
@@ -395,7 +433,7 @@ module Buttress
 
       evaluator = Evaluator.new(
         class_node: class_node, sources: @sources, depth: @depth,
-        class_path: reference.path, target: @target,
+        class_path: reference.path, target: @target, trace: @trace,
       )
       init = class_node.lookup_method(:initialize)
       positional, keywords = [args, {}]
@@ -475,7 +513,7 @@ module Buttress
       message = sym_node.children.first
 
       with_block(receiver, operator, args) do |*block_args|
-        apply(block_args.first, message, [])
+        send_to(block_args.first, message, [])
       end
     end
 
@@ -484,8 +522,11 @@ module Buttress
         raise cannot_send(receiver, operator, ' with a block')
       end
 
-      catch(:block_break) do
+      ran = 0
+      result = catch(:block_break) do
         receiver.public_send(operator, *args) do |*block_args|
+          ran += 1
+          @trace.iteration!
           yield(*block_args)
         end
       rescue CannotEvaluate
@@ -493,6 +534,14 @@ module Buttress
       rescue StandardError => error
         raise cannot_send(receiver, operator, " raises #{error.class}")
       end
+      # A walk that never ran its block over an empty collection is the
+      # vacuity signal; zero runs over a non-empty receiver (a find
+      # with no match, a fetch on a present key) is not enrichable.
+      if ran.zero? && (receiver.is_a?(Array) || receiver.is_a?(Hash)) &&
+         receiver.empty?
+        @trace.vacuous!
+      end
+      result
     end
 
     def block_param_names(node, params_node)

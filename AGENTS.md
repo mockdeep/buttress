@@ -68,13 +68,19 @@ exe/buttress → Runner → Loader (reads file)
                             Evaluator            static interpreter (env + ivars + attrs)
                               ClassReference     symbolic unresolved constant
                               InstanceValue      interpreted instance (inputs + ivars)
+                              CycleValue         symbolic Array#cycle (items + cursor)
+                              SubjectCall        expected value re-derived at test runtime
+                              Trace              block-iteration observations, shared per replay
                             ModelAttributes      schema-backed attribute store
                           spec.erb / class_spec.erb   rendering, via Target dialect
                       → Writer (mirrors path into spec/, never overwrites)
 ```
 
 `bin/dogfood` builds one `Sources` per project root and reuses it
-across that project's files.
+across that project's files. `bin/generate DIR` is the batch writer:
+one spec file per class with public instance methods, written to the
+conventional locations; existing files are reported as a collision
+list, never overwritten.
 
 The CLI takes `'ClassName#method'` for one method (rendered with
 `spec.erb`) or bare `'ClassName'` for every public instance method
@@ -114,9 +120,19 @@ The CLI takes `'ClassName#method'` for one method (rendered with
   from; the search is depth-first, affinity-ranked (`filter:` prefers
   `Filters::*`), and shares the attempt budget. The replay is the
   oracle, so a found assignment is verified by construction.
-  Outcomes: branch matches → concrete test; no inputs found → skip
-  ("cannot satisfy"); evaluation fails → skip ("cannot yet
-  evaluate"). See `Condition#solution` and `#compute_skip_reason`.
+  Finally, a *satisfied* world can still be degenerate — the
+  evaluator's `Trace` records block iterations, and a world whose
+  blocks walked empty collections zero times triggers enrichment
+  (tier-3, the success-improving search): swap one collection-shaped
+  input for a one-element collection of a synthesized project
+  instance (name affinity: `cards` → `Card`; a variant empties the
+  instance's own collection-named inputs so deep graphs construct),
+  keeping the swap only when the path still satisfies and strictly
+  more iterations ran. A satisfied world is never traded for a
+  failing one. Outcomes: branch matches → concrete test; no inputs
+  found → skip ("cannot satisfy"); evaluation fails → skip ("cannot
+  yet evaluate"). See `Condition#solution` and
+  `#compute_skip_reason`.
 - `Evaluator` resolves receiverless sends in method lookup order: own
   `def` (interpreted) → attr macros and Data members → `include`d
   module defs (same file, then `Sources`) → schema-declared model
@@ -134,6 +150,14 @@ The CLI takes `'ClassName#method'` for one method (rendered with
   `Buttress::InstanceValue` (an interpreted instance: constructor
   inputs + ivars, rendered as its own constructor call) dispatches the
   same way, in a child evaluator seeded with that instance's state.
+  Every concrete send — explicit or `&:symbol` block-passed — funnels
+  through the `send_to` chokepoint, so symbolic receivers inside
+  collections dispatch identically (a block-pass that bypassed it hid
+  a dispatch bug for as long as the collections were empty). A few
+  core results are interpreted rather than delegated because the
+  host's value couldn't cross the replay boundary: argless
+  `Array#cycle` becomes a `CycleValue`, and regexp literals evaluate
+  their parts like dstr (i/m/x flags only; everything else degrades).
   Condition synthesizes a same-class InstanceValue for parameters
   named `other` (the comparison/equality protocol). Type predicates
   the receiver's class doesn't define are answered by the static type
@@ -170,19 +194,32 @@ skip reasons ranked by frequency, and crashes. How to read it:
 - **Distinguish capability gaps from genuine limits.** Injected
   collaborators are reachable when the project itself defines them —
   the tier-2b repair search substitutes project classes/modules for
-  defaults that don't answer a needed method, and the tier-2c
+  defaults that don't answer a needed method, the tier-2c
   satisfaction search supplies plain-value collections for emptiness
-  branches. The genuine limits are collaborators that only exist
-  outside the project (gems, HTTP clients) and branches needing
-  non-empty collections of *foreign instances* — don't chase those
-  buckets.
+  branches, and tier-3 enrichment supplies one-element collections of
+  synthesized project instances. The genuine limits are collaborators
+  that only exist outside the project (gems, HTTP clients) and worlds
+  needing *coordinated* deep graphs (an element whose own collections
+  must be non-empty or whose members must align with another input) —
+  don't chase those buckets.
+- **When the skip table runs dry, diff against hand-written specs.**
+  A 100% concrete rate doesn't mean rich assertions: a satisfied path
+  may still assert only the degenerate outcome, invisible to the skip
+  table. The second-phase loop: `bin/generate` the project's specs on
+  a branch replacing its hand-written ones, run its suite, and diff —
+  every assertion the hand-written specs make that the generated ones
+  don't is an evidence-ranked capability gap (this is how vacuous-
+  world enrichment was found, along with the `&:symbol`-over-
+  interpreted-instances dispatch bug that empty collections had been
+  masking).
 - A "cannot satisfy" skip means buttress couldn't *find* inputs steering
   that branch with the current solver, not that the branch is
   unreachable. These are future-solver work items.
 
 After landing any evaluator/solver capability: run the full suite, add a
 golden-master composer spec, then re-run dogfood and compare the skip
-table to the previous run.
+table to the previous run — or, once the table is empty, regenerate the
+diff branch and compare assertions instead.
 
 ## Conventions and gotchas
 
@@ -214,13 +251,20 @@ table to the previous run.
   Enumerator, say) degrades the path to a skip at the deep-dup
   boundary, and instance synthesis validates captured ivars up front
   so it can fall back to a plain default instead. Classes re-resolve
-  by name at dispatch time.
+  by name at dispatch time. The other symbolic values (`CycleValue`,
+  `SubjectCall`) follow the same plain-values rule.
 - **Generated argument defaults (`'blah1'`, `'blah2'`…) are unique per
   position within a signature** (`ArgumentNode#value`), and the repair
   search depends on that: `CannotEvaluate` carries its receiver, and
   value equality with a parameter's current default is what traces a
   failure back to the input it came from. Collapsing defaults to a
   shared value would silently widen repair targeting to a fanout.
+  Known gap: uniqueness does not span signatures — a constructor's
+  position-1 default and a method's position-1 default are both
+  `'blah1'`, so a repair can mis-attribute across them. The result is
+  still oracle-verified, just intent-obscuring (`Filters::Tag.new([])`
+  on Subsequent is the standing symptom); the fix is making positions
+  unique across the constructor + method pair.
 - **Never whitelist `hash` or `object_id`** (or anything else
   process-seeded): the host-computed value differs run to run, so the
   generated assertion would be flaky-wrong. The hash-delegation idiom

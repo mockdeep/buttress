@@ -161,6 +161,26 @@ RSpec.describe Buttress::Evaluator do
       .to raise_error(Buttress::CannotEvaluate, %r{/y/o})
   end
 
+  it 'traces block iterations and vacuous walks' do
+    evaluator = described_class.new
+
+    evaluator.call(expr('[1, 2].map { |x| x }'), {})
+    expect(evaluator.trace.iterations).to eq(2)
+    expect(evaluator.trace.vacuous?).to eq(false)
+
+    evaluator.call(expr('[].map { |x| x }'), {})
+    expect(evaluator.trace.vacuous?).to eq(true)
+  end
+
+  it 'does not mark zero-run walks over non-empty receivers vacuous' do
+    evaluator = described_class.new
+
+    evaluator.call(expr('[1, 2].find { |x| x > 5 }'), {})
+    evaluator.call(expr('{ a: 1 }.fetch(:a) { "fallback" }'), {})
+
+    expect(evaluator.trace.vacuous?).to eq(false)
+  end
+
   it 'evaluates the map.with_index idiom' do
     node = expr('["a", "b"].map.with_index { |x, i| "#{i}#{x}" }')
 
