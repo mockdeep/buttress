@@ -36,8 +36,14 @@ module Buttress
       else
         # A def always yields at least one flow (a skipped path still
         # renders a skeleton), but a reader's flows are filtered — an
-        # empty tree would render an empty describe block.
+        # empty tree would render an empty describe block, and a class
+        # with nothing left (a reader-only Data class whose members all
+        # echo their inputs) has no spec worth writing.
         flow_trees = flow_trees.select { |tree| tree.flows.any? }
+        if flow_trees.empty?
+          raise Buttress::Error, "nothing to assert: #{class_name}"
+        end
+
         ERB.new(CLASS_TEMPLATE, trim_mode: '-').result(binding)
       end
     end

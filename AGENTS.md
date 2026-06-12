@@ -83,9 +83,12 @@ exe/buttress → Runner → Loader (reads file)
 
 `bin/dogfood` builds one `Sources` per project root and reuses it
 across that project's files. `bin/generate DIR` is the batch writer:
-one spec file per class with public (instance or singleton) methods,
-written to the conventional locations; existing files are reported as
-a collision list, never overwritten.
+one spec file per class with public methods or macro readers, written
+to the conventional locations; existing files are reported as a
+collision list, never overwritten, and a class whose flows all filter
+away (a reader-only Data class where every member echoes its input)
+is reported under "nothing to assert" rather than written as an empty
+shell.
 
 The CLI takes `'ClassName#method'` for one instance method or
 `'ClassName.method'` for one singleton method (rendered with
@@ -249,10 +252,13 @@ skip reasons ranked by frequency, and crashes. How to read it:
   satisfaction search supplies plain-value collections for emptiness
   branches, and tier-3 enrichment supplies one-element collections of
   synthesized project instances. The genuine limits are collaborators
-  that only exist outside the project (gems, HTTP clients) and worlds
-  needing *coordinated* deep graphs (an element whose own collections
-  must be non-empty or whose members must align with another input) —
-  don't chase those buckets.
+  that only exist outside the project (gems, HTTP clients, I/O).
+  Coordinated deep graphs (an element whose own collections must be
+  non-empty, or whose members must align with another input) are NOT
+  a genuine limit — they're roadmap. The project's north star is 100%
+  line + branch coverage of a target project from generated specs
+  alone, so any world the searches can't construct is a capability
+  gap by definition.
 - **When the skip table runs dry, diff against hand-written specs.**
   A 100% concrete rate doesn't mean rich assertions: a satisfied path
   may still assert only the degenerate outcome, invisible to the skip
@@ -263,6 +269,14 @@ skip reasons ranked by frequency, and crashes. How to read it:
   world enrichment was found, along with the `&:symbol`-over-
   interpreted-instances dispatch bug that empty collections had been
   masking).
+- **When the assertion diff runs dry too, measure coverage of the
+  generated specs alone** (phase 3, the sharpest instrument): run
+  only the generated spec files with SimpleCov and read per-file
+  line/branch coverage — every dark line is a world the searches
+  couldn't construct, named by exact line number. Delete the
+  project's `coverage/` directory first (SimpleCov merges resultsets
+  within a 10-minute window) and re-run the full suite afterward to
+  restore it.
 - A "cannot satisfy" skip means buttress couldn't *find* inputs steering
   that branch with the current solver, not that the branch is
   unreachable. These are future-solver work items.

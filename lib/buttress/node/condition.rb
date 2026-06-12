@@ -988,9 +988,28 @@ class Condition
       singleton: singleton,
     ).tap do |evaluator|
       unless model? || singleton
+        unless constructible?
+          raise Buttress::CannotEvaluate,
+                "cannot prove construction of #{class_name || class_node.name}"
+        end
         evaluator.run_initialize(deep_dup(positional), deep_dup(keywords))
       end
     end
+  end
+
+  # Whether the rendered `Klass.new(...)` provably constructs: an own
+  # initialize is interpretable, and without one a bare new is only
+  # valid for an argless class with no Data members (Data.new raises
+  # for missing members) and no declared superclass (an inherited
+  # initialize could require arguments). The same rule synthesizable?
+  # applies to collaborators, applied to the class under test.
+  def constructible?
+    return true if class_node.lookup_method(:initialize)
+    return false if class_node.data_members.any?
+
+    class_node.superclass_name.nil? &&
+      (sources.nil? ||
+       sources.superclass_names(class_name || class_node.name).empty?)
   end
 
   # Argument values for this path: declared or generated defaults,
@@ -1109,18 +1128,8 @@ class Condition
     nil
   end
 
-  # A class with its own initialize is always constructible from
-  # solved inputs. Without one, Class.new is only safe when no
-  # definition declares a superclass (an inherited initialize could
-  # require arguments) and there are no Data members to populate.
   def synthesizable?
-    return false if model?
-    return true if class_node.lookup_method(:initialize)
-    return false if class_node.data_members.any?
-
-    class_node.superclass_name.nil? &&
-      (sources.nil? ||
-       sources.superclass_names(class_name || class_node.name).empty?)
+    !model? && constructible?
   end
 
   # Required parameters always get a value; optional keywords only

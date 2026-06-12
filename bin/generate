@@ -17,6 +17,7 @@ target = Buttress::Target.new(target_version)
 
 written = []
 collisions = []
+empties = []
 failures = []
 
 Dir.glob(File.join(dir, "**", "*.rb")).sort.each do |file|
@@ -31,13 +32,16 @@ Dir.glob(File.join(dir, "**", "*.rb")).sort.each do |file|
     class_node = root.lookup_class(class_name)
     next if class_node.nil?
     next if class_node.public_method_names.empty? &&
-            class_node.public_singleton_method_names.empty?
+            class_node.public_singleton_method_names.empty? &&
+            class_node.public_reader_names.empty?
 
     begin
       written << Buttress::Runner.call(file, class_name, target_version)
     rescue Buttress::Error => error
       if error.message.start_with?("refusing to overwrite")
         collisions << [class_name, error.message[/refusing to overwrite existing (.*)/, 1]]
+      elsif error.message.start_with?("nothing to assert")
+        empties << class_name
       else
         failures << ["#{file} (#{class_name})", error.message[0, 100]]
       end
@@ -51,6 +55,11 @@ written.each { |path| puts "  #{path}" }
 if collisions.any?
   puts "\n=== Collisions (#{collisions.count}) — delete to regenerate ==="
   collisions.each { |name, path| puts "  #{path}  (#{name})" }
+end
+
+if empties.any?
+  puts "\n=== Nothing to assert (#{empties.count}) — every flow filtered ==="
+  empties.each { |name| puts "  #{name}" }
 end
 
 if failures.any?

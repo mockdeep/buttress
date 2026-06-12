@@ -2729,4 +2729,47 @@ RSpec.describe Buttress::Composer, '#call' do
 
     expect(described_class.call(code, 'Box', 'labels')).to eq(expected_tests)
   end
+
+  it 'refuses a class spec when every flow filters away' do
+    code = <<~RUBY
+      MyClass = Data.define(:id, :name)
+
+      class MyClass
+        def initialize(id:, name:)
+          super(id:, name:)
+        end
+      end
+    RUBY
+
+    expect { described_class.call(code, 'MyClass') }
+      .to raise_error(Buttress::Error, 'nothing to assert: MyClass')
+  end
+
+  it 'degrades when construction of the class under test is unprovable' do
+    code = <<~RUBY
+      MyClass = Data.define(:name)
+
+      class MyClass
+        def shout
+          name.to_s
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe MyClass do
+        describe '#shout' do
+          it 'returns name.to_s' do
+            skip 'Buttress cannot yet evaluate: cannot prove construction of MyClass'
+
+            my_class = MyClass.new
+
+            my_class.shout
+          end
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass')).to eq(expected_tests)
+  end
 end
