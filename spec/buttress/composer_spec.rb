@@ -1809,6 +1809,32 @@ RSpec.describe Buttress::Composer, '#call' do
     expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
   end
 
+  it 'falls back to plain defaults when instance state cannot marshal' do
+    code = <<~RUBY
+      class MyClass
+        def initialize(items = [1, 2])
+          @pages = items.each_slice(2)
+        end
+
+        def same?(other)
+          true
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe MyClass, '#same?' do
+        it 'returns true' do
+          my_class = MyClass.new
+
+          expect(my_class.same?('blah1')).to eq(true)
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'same?')).to eq(expected_tests)
+  end
+
   it 'interprets singleton methods on modules in the same file' do
     code = <<~RUBY
       module Pipeline

@@ -347,7 +347,11 @@ class Condition
       class_path: class_name || class_node.name,
       positional: positional,
       keywords: keywords,
-      ivars: evaluator.ivars,
+      # deep_dup doubles as a marshalability check: interpreted state
+      # holding an unmarshalable value (an Enumerator, say) would break
+      # the replay boundary for every path the instance appears on, so
+      # the synthesis degrades to nil instead.
+      ivars: deep_dup(evaluator.ivars),
     )
   rescue Buttress::CannotEvaluate
     nil
@@ -381,8 +385,12 @@ class Condition
     constructor_inputs
   end
 
+  # Unmarshalable values (Enumerators and friends) can't cross the
+  # replay boundary; degrading beats asserting from corrupt state.
   def deep_dup(value)
     Marshal.load(Marshal.dump(value))
+  rescue TypeError
+    raise Buttress::CannotEvaluate, 'unmarshalable instance state'
   end
 
   def constrained_names

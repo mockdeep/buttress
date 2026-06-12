@@ -100,6 +100,26 @@ RSpec.describe Buttress::Evaluator do
     expect(call(expr('[1, 2].map { _1 * 3 }'))).to eq([3, 6])
   end
 
+  it 'evaluates hash fetch with a fallback block' do
+    expect(call(expr('{ a: 1 }.fetch(:b) { "fallback" }'))).to eq('fallback')
+    expect(call(expr('{ a: 1 }.fetch(:a) { "fallback" }'))).to eq(1)
+  end
+
+  it 'evaluates array fetch with a default' do
+    expect(call(expr('[10, 20].fetch(0)'))).to eq(10)
+    expect(call(expr('[10, 20].fetch(5, "default")'))).to eq('default')
+  end
+
+  it 'evaluates each_slice through to_a' do
+    expect(call(expr('[1, 2, 3].each_slice(2).to_a'))).to eq([[1, 2], [3]])
+  end
+
+  it 'evaluates the map.with_index idiom' do
+    node = expr('["a", "b"].map.with_index { |x, i| "#{i}#{x}" }')
+
+    expect(call(node)).to eq(%w[0a 1b])
+  end
+
   it 'evaluates each_with_object with contained mutation' do
     node = expr('[1, 2].each_with_object([]) { |x, memo| memo << x * 2 }')
 

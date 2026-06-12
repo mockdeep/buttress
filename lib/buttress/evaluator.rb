@@ -41,10 +41,14 @@ module Buttress
       # into the evaluation env).
       Array => %i[
         + - * & | == != nil? [] << push concat length size empty? first
-        last reverse sort min max any? none? one?
+        last fetch reverse sort min max any? none? one?
         sum uniq compact flatten include? index join slice take drop
-        to_a inspect
+        map each_slice to_a inspect
       ],
+      # Blockless map / each_slice return Enumerators; to_a realizes
+      # them. Enumerators never persist — they can't Marshal, so the
+      # deep-dup boundary degrades any value carrying one.
+      Enumerator => %i[to_a],
       Hash => %i[== != nil? [] []= store delete fetch length size empty?
                  any? none? one? keys values invert merge include? key?
                  has_key? has_value? value? to_a inspect],
@@ -64,8 +68,9 @@ module Buttress
       Hash => %i[
         map each each_pair select filter reject any? all? none? count
         sum min_by max_by sort_by group_by partition detect find
-        each_with_object transform_values transform_keys
+        each_with_object transform_values transform_keys fetch
       ],
+      Enumerator => %i[with_index],
       Range => %i[
         map collect each select filter reject flat_map each_with_object
         detect find any? all? none? count sum min_by max_by sort_by
