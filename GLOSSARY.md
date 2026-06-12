@@ -1,8 +1,8 @@
 # Glossary
 
 Definitions for the vocabulary used in Buttress's code, comments, specs,
-commit messages, and `AGENTS.md`. This file defines terms; `AGENTS.md`
-explains the design principles and how the pieces fit together.
+commit messages, and `AGENTS.md`. This file is the gentle introduction;
+`AGENTS.md` carries the full mechanics and the design principles.
 
 Terms are buttress coinages unless marked *(industry term)*. Where a
 coinage descends from a named technique in the literature, the entry
@@ -11,239 +11,291 @@ reading.
 
 ## Paths and predicates
 
-- **path** — one execution route through a method: the branch predicates
-  that select it, the intermediate statements along it, and its return
-  node. Produced by `PathEnumerator`, which splits on `if`/`unless`/
-  ternary/`case`/`&&`/`||` by short-circuit semantics.
-- **steps** — a path's statements and predicates interleaved in
-  execution order. The ordering is load-bearing: the concolic replay
-  walks the steps in sequence so each predicate is checked against the
-  environment as it stood at that branch point.
-- **predicate** — a branch condition, classified by `Predicate`
-  (truthiness, comparison, or query on arguments or receiverless
-  attribute reads). Unsupported forms report `solvable? == false`
-  rather than raising.
-- **polarity** — the truth value a predicate must concretely evaluate to
-  for the replay to stay on the path (the `if` arm needs true, the
-  `else` arm false).
-- **boundary values** *(industry term)* — the concrete candidate values
-  `Predicate` picks to drive a condition to each polarity (tier-1
-  solving). From boundary-value analysis: choose inputs at the edges of
-  a predicate's domain.
+- **path** — one route execution can take through a method. A method
+  with a single `if` has two paths: the one where the condition held,
+  and the one where it didn't. Buttress generates one test per path
+  (plus outcome variants — see tier-3b). `PathEnumerator` finds the
+  paths by splitting on `if`/`unless`/ternary/`case`/`&&`/`||`,
+  honoring short-circuit rules.
+- **steps** — everything that happens along a path, in the order it
+  happens: ordinary statements interleaved with branch conditions. The
+  order matters because the replay walks the steps in sequence,
+  checking each condition against the program's state *at that moment*
+  — a variable assigned on line 3 can change which way line 5 branches.
+- **predicate** — a branch condition, like `count > 5` or
+  `name.empty?`. `Predicate` classifies each one (testing truthiness?
+  comparing? calling a query method?) and decides whether it knows how
+  to pick values for it. A form it doesn't recognize reports
+  `solvable? == false` instead of raising.
+- **polarity** — which way a branch must go for execution to stay on
+  the path: the `if` arm needs its condition true, the `else` arm needs
+  it false.
+- **boundary values** *(industry term)* — the specific values picked to
+  push a condition each way. For `count > 5`, the natural picks are `6`
+  (just barely true) and `5` (just barely false) — values at the edge
+  of the condition's domain. From boundary-value analysis.
 
 ## Solving: worlds, attempts, and the tiers
 
-- **world** — one coherent candidate assignment of every input a path
-  needs: constructor inputs plus method argument bindings. The tier
-  searches generate and test worlds; rendering locks onto one found
-  world.
-- **Attempt** — the struct (`Condition::Attempt`) capturing a solved
-  world together with its replay results, including the path's return
-  value. The return value is computed exactly once, inside
-  `Condition#attempt` — never re-evaluated at render time, because a
-  mutating return expression would mutate twice.
-- **concolic** — portmanteau of **conc**rete + symb**olic**, borrowed
-  from the concolic-testing literature, where a program is executed
-  with concrete inputs while symbolic constraints are tracked
-  alongside. Buttress inverts the usual direction: classic concolic
-  testing runs the real program and collects constraints to discover
-  new paths, while buttress starts from the symbolically enumerated
-  path and uses concrete evaluation to verify it — but the essential
-  mix is the same: symbolic path constraints checked by concrete
-  execution over a blend of concrete and symbolic values.
-- **concolic replay** — the self-verification step: replay a path's
-  steps in execution order against a world's concrete inputs,
-  evaluating statements and requiring every predicate to concretely
-  evaluate to its needed polarity. Only a replay-verified world becomes
-  a concrete test.
-- **the oracle** *(industry term)* — the replay, in its role as
-  arbiter: a world the replay accepts is correct by construction, so
-  the searches never need to justify *how* they found a candidate. The
-  standard "test oracle" sense — the thing that decides whether
-  observed behavior is right. (Distinct from the **static type
-  oracle**, below.)
-- **static type oracle** — the tri-state answering machinery for type
-  predicates (`is_a?`, `respond_to?`): true, false, or degrade — never
-  a best guess. Falsity requires a fully resolved superclass chain; see
-  design principle 5 in `AGENTS.md` and the `host_type_query` /
-  `instance_type_query` section of `Evaluator`.
-- **tier** — buttress's own escalation ladder, not a literature term:
-  each tier is what runs when the previous tier's result isn't good
+- **world** — one complete guess at all the inputs a test needs: what
+  to pass the constructor and what to pass the method, together. Called
+  a world because the pieces must be coherent as a whole — a
+  constructor input can change which method arguments work. The
+  searches propose worlds; the replay accepts or rejects them.
+- **search** — the guess-and-check loop the tiers share: propose a
+  world, replay it, keep it if every branch went the right way,
+  otherwise propose another. Tier-1 isn't a search (it reads the answer
+  directly off the condition); everything from tier-2 up is — the tiers
+  differ in *what suggests the next candidate* (seeded constants, the
+  failure's own name, a one-swap of a working world). Because the
+  replay is the oracle, a search doesn't have to be clever to be sound:
+  any world it finds is verified by construction. Bounded by the search
+  budget.
+- **Attempt** — the struct (`Condition::Attempt`) recording a world
+  together with what happened when it was replayed, including the
+  path's return value. The return value is computed exactly once,
+  inside `Condition#attempt`, because a return expression that mutates
+  state (`@list << x`) would give a different answer the second time.
+- **concolic** *(industry term)* — a portmanteau of **conc**rete +
+  symb**olic**, from a family of testing techniques that mix real
+  execution with symbolic reasoning. In classic concolic testing you
+  run the program on concrete inputs and track symbolic constraints on
+  the side to discover new paths. Buttress runs the mix in the other
+  direction: it enumerates paths symbolically, then uses concrete
+  evaluation to verify them. Either way the essential move is the same
+  — symbolic path constraints checked by concrete values.
+- **concolic replay** — the double-check before any test is written:
+  buttress re-runs the path step by step with the inputs it picked and
+  watches every branch actually go the way the test will claim. If even
+  one branch goes the other way, no test is emitted from that world.
+  This is what makes generated assertions trustworthy — a test exists
+  only because its inputs were *seen* to work.
+- **the oracle** *(industry term)* — the judge of correctness. In
+  buttress the replay is the oracle: a world the replay accepts is
+  correct by construction, so the searches are free to guess wildly — a
+  lucky guess is exactly as good as a clever one. This is the standard
+  "test oracle" sense: the thing that decides whether observed behavior
+  is right. (A different thing from the **static type oracle**, below.)
+- **static type oracle** — the machinery that answers type questions
+  (`is_a?`, `respond_to?`) about code buttress never runs. Answers are
+  tri-state: yes, no, or "can't say" (which degrades the path) — never
+  a best guess. Saying *no* takes the most evidence: buttress must have
+  resolved the entire superclass chain to be sure. See design principle
+  5 in `AGENTS.md` and the `host_type_query` / `instance_type_query`
+  section of `Evaluator`.
+- **tier** — buttress's own escalation ladder, not a literature term.
+  Each tier is what runs when the previous tier's answer isn't good
   enough, and the numbering tracks both cost and the order the
-  capabilities landed. The individual tiers descend from named
+  capabilities landed. The individual rungs descend from named
   techniques in the literature (noted per entry); the ladder itself is
   homegrown.
-- **tier-1** — constraint solving in `Predicate`: pick boundary values
-  directly from the branch predicates.
-- **tier-2** — the mutation search: when the default-input replay takes
-  a branch the wrong way, retry with mutated inputs — seeded
-  constructor candidates crossed with argument-type alternatives,
-  budget-capped. Buttress's slice of search-based software testing
-  (SBST).
-- **tier-2b** — the failure-driven repair search: when the replay
-  *cannot evaluate* (a default doesn't answer a method the path needs),
-  swap in values that do — project classes/modules defining the missing
-  method (via `Sources#definers_of`) plus core containers (`[]` / `{}`).
-  `CannotEvaluate` carries its receiver, which is what makes targeting
-  precise. Feedback-directed in the Randoop sense — the failure itself
-  names the next candidate — though narrower: the feedback is a typed
-  exception, not a generic run result.
-- **tier-2c** — the satisfaction expansion: when a partially-repaired
-  world's replay fails a predicate, `UnsatisfiablePath` carries that
-  predicate, and the search assigns the input it names — collection
-  emptiness polarities, bound to a declared constructor keyword or
-  riding the kwrest as an undeclared key.
-- **tier-3** / **enrichment** — the success-improving search: a
-  satisfied-but-vacuous world gets one collection-shaped input swapped
-  for a one-element collection of a synthesized project instance,
-  keeping the swap only when the path still satisfies and strictly more
-  block iterations ran. A satisfied world is never traded for a failing
-  one. A hill climb, with the trace's iteration count as the fitness
-  function.
-- **tier-3b** / **outcome splitting** — for paths whose return
-  expression is a comparison-family send (`<=>`, equality selectors,
-  `?`-queries): one satisfied world witnesses only one point of the
-  return value's domain, so each uncovered outcome gets its own
-  one-swap search, and each world found renders as its own test named
-  by the outcome. An unreached outcome gets no test, never a skip.
-  Output-coverage-driven: tests are sought per point of the return
-  value's domain, not just per branch.
-- **one-swap** — the mutation discipline of tiers 3 and 3b: vary a
-  single input slot per candidate, keeping search and attribution
-  tractable.
-- **search budget** *(industry term)* — the cap on candidate worlds the
-  tier searches may try for one path, shared across them
-  (`Condition::SEARCH_BUDGET`). The standard SBST term.
-- **constant seeding** *(industry term)* — mining literal values from
-  the code the class itself compares against and seeding the search
-  with them, as constructor candidates (tier-2) and equality neighbors
-  (tier-3b). A named SBST strategy; see `Condition#seed_literals`.
-- **affinity ranking** — preferring candidates whose names match the
-  slot being filled: a `filter:` keyword prefers `Filters::*` classes,
-  a `cards` collection synthesizes a `Card`.
-- **vacuous world** — a satisfied world whose block iterations never
-  ran (every block walked an empty collection), detected via
-  `Trace#vacuous?`. Satisfies the path but asserts only the degenerate
-  outcome; the trigger for tier-3 enrichment. "Vacuous" carries its
-  model-checking sense: satisfied without being exercised.
+- **tier-1** — reading the answer straight off the branch condition, no
+  searching. If a path needs `count > 5` to be true, the condition
+  itself tells you what to pass: `6` (or `5` for the false side). This
+  is the cheapest tier and handles conditions that test an argument
+  directly. Lives in `Predicate`.
+- **tier-2** — guess-and-check, for when the condition tests something
+  the caller doesn't directly control — usually instance state.
+  Buttress builds variations of the constructor inputs (values drawn
+  from constant seeding, crossed with alternative argument types),
+  replays each, and keeps the first where every branch goes the right
+  way. Capped by the search budget. Buttress's slice of search-based
+  software testing (SBST).
+- **tier-2b** — the repair search, for when the replay can't even
+  *finish*: some default input doesn't answer a method the path calls
+  (the placeholder string `'blah1'` has no `#filter`, say). The failure
+  names what's missing — `CannotEvaluate` carries the receiver that
+  failed — so buttress swaps that exact input for something that does
+  answer: a project class or module defining the method
+  (`Sources#definers_of`), or a plain `[]` / `{}`. Feedback-directed in
+  the Randoop sense — the failure itself names the next candidate —
+  though narrower: the feedback is a typed exception, not a generic run
+  result.
+- **tier-2c** — the same repair engine pointed at the other failure
+  kind: a partially-repaired world replays fine, but a branch goes the
+  wrong way. `UnsatisfiablePath` carries the failing condition, and the
+  search gives the input it names the property the branch wants —
+  usually a collection that must be empty or non-empty — bound to a
+  declared constructor keyword, or smuggled through `**kwargs` when the
+  constructor reads it with `args.fetch(:items)`.
+- **tier-3** / **enrichment** — the polish pass. A satisfied world can
+  still be hollow: if every block on the path looped over an empty
+  collection, the test passes while exercising almost nothing (see
+  vacuous world). Enrichment retries with one collection input swapped
+  for a one-element collection of a synthesized project instance
+  (`cards` → one `Card`), keeping the swap only when the path still
+  holds and the blocks actually ran more. A working world is never
+  traded for a broken one. A hill climb, with the trace's iteration
+  count as the fitness function.
+- **tier-3b** / **outcome splitting** — extra tests for methods whose
+  return value has a small menu of possible answers: `<=>` returns
+  -1/0/1, equality and `?`-query methods return true/false. One world
+  only demonstrates one item from the menu, so each missing outcome
+  gets its own small search (the same one-swap moves over the same
+  inputs), and each world found becomes its own test, named for the
+  outcome it shows (`returns pos <=> other.pos (-1)`). An outcome no
+  world reaches simply gets no test — never a skip. Output-coverage-
+  driven: tests are sought per point of the return value's domain, not
+  just per branch.
+- **one-swap** — the search discipline of tiers 3 and 3b: change
+  exactly one input per candidate. Keeps the search small, and means
+  any improvement can be credited to the single swap that caused it.
+- **search budget** *(industry term)* — the cap on how many candidate
+  worlds the searches may try for one path, shared across all of them
+  (`Condition::SEARCH_BUDGET`). Without it, guess-and-check could run
+  unbounded. The standard SBST term.
+- **constant seeding** *(industry term)* — stealing good guesses from
+  the code itself. If the class compares an attribute against `:admin`
+  somewhere, `:admin` is probably worth trying as an input. Buttress
+  mines these literals (`Condition#seed_literals`) and feeds them to
+  the searches as constructor candidates (tier-2) and equality
+  neighbors (tier-3b). A named SBST strategy.
+- **affinity ranking** — trying name-matching candidates first: a
+  `filter:` keyword tries `Filters::*` classes before others, a `cards`
+  collection synthesizes a `Card`. Names are a hint, not a rule —
+  non-matching candidates still get tried, just later.
+- **vacuous world** — a world whose test passes without really testing
+  anything: every block on the path iterated zero times because its
+  collection was empty, so the assertion covers only the do-nothing
+  outcome. Detected via `Trace#vacuous?`; the trigger for tier-3
+  enrichment. "Vacuous" carries its model-checking sense: satisfied
+  without being exercised.
 
 ## Symbolic values
 
-Values the `Evaluator` constructs to stand in for things it can't (or
-deliberately won't) get from the host Ruby. All of them follow the
-**plain-values rule**: they hold only marshal-able plain data (strings,
-numbers, hashes) — never AST nodes or node wrappers — because the
-replay deep-dups bindings with Marshal and classes re-resolve by name
-at dispatch time.
+Stand-ins the `Evaluator` builds for things it can't (or deliberately
+won't) take from the host Ruby. All of them follow the **plain-values
+rule**: they carry only plain, Marshal-able data — strings, numbers,
+hashes — never AST nodes or node wrappers. That's because the replay
+deep-dups all bindings with Marshal, and classes are re-looked-up by
+name at the moment they're needed.
 
-- **`ClassReference`** — a symbolic unresolved constant. Supports
-  equality and rendering via textual path comparison, by design.
-- **`InstanceValue`** — an interpreted instance: class path string,
-  constructor inputs, and ivars. Renders as its own constructor call;
-  sends dispatch in a child evaluator seeded with the instance's state.
-- **`CycleValue`** — symbolic argless `Array#cycle` (items + cursor),
-  interpreted because the host's Enumerator can't cross the replay
-  boundary.
-- **`SubjectCall`** — an expected value re-derived at test runtime as a
-  chain on the subject, so process-seeded values cancel out. The
-  hash-delegation idiom renders as
-  `expect(x.hash).to eq(x.id.hash)` instead of a frozen host value.
-- **`Trace`** — block-iteration observations, shared per replay. Powers
-  vacuous-world detection.
+- **`ClassReference`** — a constant buttress couldn't resolve, kept as
+  a name instead of a value. Two references are equal when their
+  textual paths match — by design, since there's nothing else to
+  compare.
+- **`InstanceValue`** — buttress's version of an object: the class's
+  name, the constructor inputs that built it, and its ivars. It renders
+  into the generated test as a real constructor call, and method calls
+  on it are interpreted in a child evaluator seeded with its state.
+- **`CycleValue`** — a stand-in for argless `Array#cycle` (the items
+  plus a cursor), interpreted rather than delegated because the host's
+  Enumerator can't survive the Marshal round-trip.
+- **`SubjectCall`** — an expected value the *test* computes at runtime
+  instead of buttress computing it now. Used when the real value
+  differs per process: `x.hash` can't be baked into an assertion (the
+  hash seed changes every run), but `expect(x.hash).to eq(x.id.hash)`
+  works, because both sides run in the same process and the seed
+  cancels out.
+- **`Trace`** — the replay's diary of block activity: how many times
+  blocks iterated, shared across one replay. What makes vacuous worlds
+  detectable.
 
 ## Evaluation and sandboxing
 
-- **degrade** — fall back to a skipped skeleton test (with a reason)
-  rather than guess. The universal failure mode: never a crash, never
-  an assertion that might be wrong. A crash during generation is always
-  a buttress bug, by definition.
-- **purity whitelist** — `Evaluator::PURE_METHODS` (and
-  `BLOCK_METHODS` for methods receiving interpreted blocks): the only
-  methods the Evaluator delegates to the host Ruby, on values it
-  constructed itself. Methods with external effects (I/O, global state)
-  are never whitelisted.
-- **`send_to` chokepoint** — the single funnel every concrete send goes
-  through, explicit or `&:symbol` block-passed, so symbolic receivers
-  inside collections dispatch identically.
-- **`CannotEvaluate`** — the evaluation-failure exception. Carries its
-  receiver, which (combined with unique generated defaults) lets the
-  tier-2b repair trace a failure back to the input it came from.
-- **`UnsatisfiablePath`** — the replay-took-the-wrong-branch exception.
-  Carries the failing predicate, which drives the tier-2c satisfaction
-  expansion.
-- **generated defaults** — the `'blah1'`, `'blah2'`… argument values,
-  unique per position within a signature (`ArgumentNode#value`).
-  Uniqueness is load-bearing: value equality with a parameter's current
-  default is how a failure is attributed to an input. (Known gap:
-  uniqueness doesn't span signatures — see `AGENTS.md`.)
-- **deep-dup boundary** — `Condition` Marshal-dups bindings into the
-  evaluation environment so evaluation never mutates a value that gets
-  rendered into the generated test's inputs. An unmarshalable value
-  degrades the path to a skip here.
-- **recursion depth budget** — the shared cap on nested interpretation
-  threaded through every child evaluator.
+- **degrade** — buttress's only allowed failure mode: fall back to a
+  skipped skeleton test that says why, rather than guess. Never a
+  crash, and never an assertion that might be wrong — a crash during
+  generation is always a buttress bug, by definition.
+- **purity whitelist** — the short list of methods the Evaluator will
+  actually run on the host (`Evaluator::PURE_METHODS`, plus
+  `BLOCK_METHODS` for methods that take interpreted blocks), and only
+  on values it built itself. `String#upcase` is safe to run for real;
+  anything that touches I/O or global state never gets whitelisted.
+- **`send_to` chokepoint** — the single funnel every real method call
+  goes through, whether written explicitly or passed as `&:symbol`. One
+  funnel means symbolic receivers buried inside collections get the
+  same dispatch as everything else — a block-pass that bypassed it once
+  hid a dispatch bug for as long as collections stayed empty.
+- **`CannotEvaluate`** — the "I don't know how to run this" exception.
+  It carries the receiver that failed, which — combined with every
+  generated default being unique — lets the tier-2b repair trace a
+  failure back to the exact input that caused it.
+- **`UnsatisfiablePath`** — the "a branch went the wrong way"
+  exception. It carries the failing predicate, which is how tier-2c
+  knows *which* input to fix and *what* property it needs.
+- **generated defaults** — the `'blah1'`, `'blah2'`… placeholder values
+  buttress invents for arguments. Each position in a signature gets its
+  own (`ArgumentNode#value`), and the uniqueness is load-bearing: when
+  a failure carries a value equal to `'blah2'`, buttress knows exactly
+  which parameter it came from. (Known gap: uniqueness doesn't span
+  signatures — see `AGENTS.md`.)
+- **deep-dup boundary** — before each replay, `Condition`
+  Marshal-copies all the bindings, so nothing evaluation mutates can
+  leak back into the inputs the test will print. A value that can't be
+  Marshal-copied (an Enumerator, say) degrades the path to a skip right
+  here.
+- **recursion depth budget** — the shared cap on how deep interpreted
+  calls may nest, threaded into every child evaluator so a method that
+  calls a method that calls a method eventually stops.
 
 ## Output vocabulary
 
-- **concrete test** — a fully solved, replay-verified test: real
-  constructor inputs, real arguments, a computed expected value.
-- **skeleton test** (or **skip**) — the degraded form: a generated test
-  marked `skip`/`pending`, carrying its skip reason. Wrong tests are
-  worse than no tests.
-- **skip reason** — the message explaining why a path degraded
-  (`Condition#skip_reason`). The two families: "cannot satisfy" (no
-  inputs found that steer the branch — a future-solver work item, not
-  an unreachable branch) and "cannot yet evaluate" (evaluation hit
-  something the interpreter doesn't cover).
-- **Flow / FlowTree** — the template-facing layer
-  (`lib/buttress/flow_tree.rb`): `Flow` wraps a `Condition` with
+- **concrete test** — the good outcome: a generated test with real
+  inputs and a real expected value, every branch verified by replay.
+- **skeleton test** (or **skip**) — the honest fallback: a generated
+  test marked `skip`/`pending`, carrying the reason buttress couldn't
+  do better. Wrong tests are worse than no tests.
+- **skip reason** — the explanation on a skeleton test
+  (`Condition#skip_reason`). Two families: "cannot satisfy" means no
+  inputs were found that steer the branches the right way (a solver
+  gap, not proof the branch is unreachable); "cannot yet evaluate"
+  means the interpreter hit something it doesn't cover yet.
+- **Flow / FlowTree** — what the templates see
+  (`lib/buttress/flow_tree.rb`). A `Flow` wraps a `Condition` with
   rendering helpers (`method_call`, `constructor_call`), and the
-  templates speak in flows (`flow.skip_reason`). `FlowTree` assembles
+  templates speak in flows (`flow.skip_reason`); `FlowTree` collects
   the flows for a class or method.
-- **collision list** — `bin/generate`'s report of spec files that
-  already exist; existing files are listed, never overwritten.
+- **collision list** — `bin/generate`'s answer to "this spec file
+  already exists": report it in a list and move on. Existing files are
+  never overwritten.
 
 ## Host vs target
 
 The host/target distinction is compiler-land vocabulary *(industry
-term)*: the environment you run on versus the one you emit for.
+term)*: the environment you run on versus the one you produce output
+for.
 
 - **host Ruby** — the modern Ruby buttress itself runs on. The
   gemspec's `required_ruby_version` describes the host.
-- **target Ruby** — the version of the codebase under analysis ('1.8'
-  through '3.3'). Everything version-sensitive — parser grammar, spec
-  dialect, version-gated evaluation answers — lives in
+- **target Ruby** — the (possibly ancient) Ruby of the codebase under
+  analysis, '1.8' through '3.3'. The target Ruby never needs to be
+  installed — buttress only has to parse its syntax and emit specs its
+  era of RSpec would accept. Everything version-sensitive lives in
   `Buttress::Target` and threads through `Condition` into every child
   evaluator.
-- **spec dialect** — the version-appropriate RSpec surface:
-  `describe` vs `RSpec.describe`, `should` vs `expect`,
-  `pending` vs `skip`, hash rockets vs keyword hashes.
+- **spec dialect** — the RSpec the target era would recognize:
+  `describe` vs `RSpec.describe`, `should` vs `expect`, `pending` vs
+  `skip`, hash rockets vs keyword hashes.
 
 ## Dogfooding and process
 
 - **dogfood** — `bin/dogfood DIR [TARGET_RUBY_VERSION]`: run buttress
-  across every class under a directory (typically a sibling project's
-  `lib/`, never written to disk) and print totals, the concrete rate,
-  the skip table, and crashes. The evidence loop that decides the
-  roadmap. ("Dogfooding" is industry slang — using your own product on
-  real work; here, running buttress against real sibling codebases.)
-- **concrete rate** — the fraction of enumerated paths that emit
-  concrete tests.
-- **skip table** — skip reasons ranked by frequency. The ranked
-  backlog: the biggest bucket is usually the next milestone.
-- **skips morphing** — skips converting into deeper, truer skip reasons
-  when a capability lands (evaluation got further and found the real
-  wall). Progress even when the concrete rate doesn't move; compare
-  skip *reasons* across runs, not just the rate.
-- **phase-2 loop** (or **diff branch**) — the loop for when the skip
-  table runs dry: `bin/generate` the project's specs on a branch
-  replacing its hand-written ones, run its suite, and diff — every
-  assertion the hand-written specs make that the generated ones don't
-  is an evidence-ranked capability gap.
-- **golden-master composer spec** — the composer test style: heredoc
-  Ruby in, exact heredoc spec out. One per new capability.
-  "Golden master" is the industry term for asserting against a
-  recorded exact output.
+  over every class in a directory (typically a sibling project's
+  `lib/`; nothing is written to disk) and print totals, the concrete
+  rate, the skip table, and crashes. This is how the roadmap gets
+  decided — by evidence, not speculation. ("Dogfooding" is industry
+  slang for using your own product on real work.)
+- **concrete rate** — of all the paths buttress found, the fraction
+  that became concrete tests.
+- **skip table** — skip reasons ranked by how often they occurred. Read
+  it as the backlog: every row names a missing capability, and the
+  biggest bucket is usually the next milestone.
+- **skips morphing** — when skips turn into deeper, truer skips instead
+  of disappearing. Landing a capability often moves a path *further*
+  before it gets stuck ("cannot evaluate: DEFAULT_MODE" became "cannot
+  evaluate: String#call" once constants resolved). That's progress even
+  when the concrete rate doesn't move — compare skip reasons across
+  runs, not just the rate.
+- **phase-2 loop** (or **diff branch**) — what to do when the skip
+  table runs dry: generate specs for a project on a branch, replacing
+  its hand-written ones, run its suite, and diff. Every assertion the
+  hand-written specs make that the generated ones don't is a capability
+  gap, ranked by evidence.
+- **golden-master composer spec** — the composer test style: a heredoc
+  of Ruby in, the exact heredoc of the expected spec out. One per new
+  capability. "Golden master" is the industry term for asserting
+  against a recorded exact output.
 
 ## Terms from the literature
 
