@@ -1808,4 +1808,68 @@ RSpec.describe Buttress::Composer, '#call' do
 
     expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
   end
+
+  it 'interprets singleton methods on modules in the same file' do
+    code = <<~RUBY
+      module Pipeline
+        class << self
+          def call(input)
+            input.upcase
+          end
+        end
+      end
+
+      class MyClass
+        def call_me
+          Pipeline.call('hi')
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe MyClass, '#call_me' do
+        it 'returns Pipeline.call("hi")' do
+          my_class = MyClass.new
+
+          expect(my_class.call_me).to eq('HI')
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
+  end
+
+  it 'constructs instances of other classes in return values' do
+    code = <<~RUBY
+      class Widget
+        attr_reader :name
+
+        def initialize(name)
+          @name = name
+        end
+
+        def shout
+          name.upcase
+        end
+      end
+
+      class MyClass
+        def call_me
+          Widget.new('bob').shout
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe MyClass, '#call_me' do
+        it 'returns Widget.new("bob").shout' do
+          my_class = MyClass.new
+
+          expect(my_class.call_me).to eq('BOB')
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'MyClass', 'call_me')).to eq(expected_tests)
+  end
 end

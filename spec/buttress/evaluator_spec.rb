@@ -523,6 +523,115 @@ RSpec.describe Buttress::Evaluator do
       .to eq('BOB')
   end
 
+  it 'interprets singleton methods on project modules' do
+    class_node = class_node_for(<<~RUBY)
+      module Pipeline
+        class << self
+          def call(input)
+            input.upcase
+          end
+        end
+      end
+
+      class MyClass
+      end
+    RUBY
+    evaluator = described_class.new(class_node: class_node)
+
+    expect(evaluator.call(expr('Pipeline.call("hi")'), {})).to eq('HI')
+  end
+
+  it 'constructs project-class instances by interpreting initialize' do
+    class_node = class_node_for(<<~RUBY)
+      class Widget
+        attr_reader :name
+
+        def initialize(name)
+          @name = name
+        end
+
+        def shout
+          name.upcase
+        end
+      end
+
+      class MyClass
+      end
+    RUBY
+    evaluator = described_class.new(class_node: class_node)
+
+    value = evaluator.call(expr('Widget.new("bob")'), {})
+
+    expect(value).to be_a(Buttress::InstanceValue)
+    expect(value.class_path).to eq('Widget')
+    expect(value.positional).to eq(['bob'])
+    expect(value.ivars).to eq(:@name => 'bob')
+    expect(evaluator.call(expr('Widget.new("bob").shout'), {})).to eq('BOB')
+  end
+
+  it 'constructs instances through keyword initializers' do
+    class_node = class_node_for(<<~RUBY)
+      class Widget
+        def initialize(name:)
+          @name = name
+        end
+      end
+
+      class MyClass
+      end
+    RUBY
+    evaluator = described_class.new(class_node: class_node)
+
+    value = evaluator.call(expr('Widget.new(name: "bob")'), {})
+
+    expect(value.keywords).to eq(name: 'bob')
+    expect(value.ivars).to eq(:@name => 'bob')
+  end
+
+  it 'constructs argless instances of classes without an initialize' do
+    class_node = class_node_for(<<~RUBY)
+      class NullThing
+        def name
+          '<none>'
+        end
+      end
+
+      class MyClass
+      end
+    RUBY
+    evaluator = described_class.new(class_node: class_node)
+
+    expect(evaluator.call(expr('NullThing.new.name'), {})).to eq('<none>')
+  end
+
+  it 'degrades construction when an inherited initialize could exist' do
+    class_node = class_node_for(<<~RUBY)
+      class Child < Base
+      end
+
+      class MyClass
+      end
+    RUBY
+    evaluator = described_class.new(class_node: class_node)
+
+    expect { evaluator.call(expr('Child.new'), {}) }
+      .to raise_error(Buttress::CannotEvaluate)
+  end
+
+  it 'degrades construction when arguments hit no initialize' do
+    class_node = class_node_for(<<~RUBY)
+      class NullThing
+      end
+
+      class MyClass
+      end
+    RUBY
+    evaluator = described_class.new(class_node: class_node)
+
+    expect { evaluator.call(expr('NullThing.new("arg")'), {}) }
+      .to raise_error(Buttress::CannotEvaluate)
+  end
+
   it 'names the class when instance dispatch finds no method' do
     class_node = class_node_for(<<~RUBY)
       class Widget

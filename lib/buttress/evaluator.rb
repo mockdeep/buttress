@@ -299,22 +299,64 @@ module Buttress
       ).dispatch(operator, args, arg_nodes)
     end
 
-    # A method call on a symbolic class reference: resolve the class's
-    # definition (same file first, then sibling sources) and interpret
-    # its singleton method in a fresh evaluator scoped to that class.
-    # MISSING when the class or method can't be found, so the caller
-    # degrades with the usual message.
+    # A method call on a symbolic class or module reference: resolve
+    # the constant's definition (same file first, then sibling sources)
+    # and interpret its singleton method in a fresh evaluator scoped to
+    # it. A `new` with no singleton def constructs an interpreted
+    # instance instead. MISSING when the definition or method can't be
+    # found, so the caller degrades with the usual message.
     def invoke_class_method(reference, operator, args, arg_nodes)
+      definition = resolve_class(reference.path) ||
+                   resolve_module(reference.path)
+      method = definition&.lookup_singleton_method(operator)
+      if method.nil?
+        return MISSING unless operator == :new
+
+        return construct_instance(reference, args, arg_nodes)
+      end
+
+      evaluator = Evaluator.new(
+        class_node: definition, sources: @sources, depth: @depth,
+        class_path: reference.path, target: @target,
+      )
+      positional, keywords = split_keywords(method, args, arg_nodes)
+      evaluator.invoke_method(method, positional, keywords)
+    end
+
+    # Class.new on a project class: interpret its initialize in a child
+    # evaluator and capture the resulting instance state as an
+    # InstanceValue. Without an initialize to interpret, construction
+    # is only provable for an argless class with no Data members and no
+    # declared superclass — anything else would fabricate instance
+    # state an inherited initialize might really set.
+    def construct_instance(reference, args, arg_nodes)
       class_node = resolve_class(reference.path)
-      method = class_node&.lookup_singleton_method(operator)
-      return MISSING unless method
+      return MISSING unless class_node
 
       evaluator = Evaluator.new(
         class_node: class_node, sources: @sources, depth: @depth,
         class_path: reference.path, target: @target,
       )
-      positional, keywords = split_keywords(method, args, arg_nodes)
-      evaluator.invoke_method(method, positional, keywords)
+      init = class_node.lookup_method(:initialize)
+      positional, keywords = [args, {}]
+      if init
+        positional, keywords = split_keywords(init, args, arg_nodes)
+        evaluator.invoke_method(init, positional, keywords)
+      else
+        return MISSING unless args.empty? &&
+                              bare_class?(class_node, reference.path)
+      end
+
+      InstanceValue.new(
+        class_path: reference.path, positional: positional,
+        keywords: keywords, ivars: evaluator.ivars,
+      )
+    end
+
+    def bare_class?(class_node, path)
+      class_node.data_members.empty? &&
+        class_node.superclass_name.nil? &&
+        (@sources.nil? || @sources.superclass_names(path).empty?)
     end
 
     def resolve_class(path)
@@ -527,7 +569,7 @@ module Buttress
       return @modules[name] if @modules.key?(name)
 
       @modules[name] =
-        @class_node.parent_node&.find_module(name) ||
+        @class_node&.parent_node&.find_module(name) ||
         @sources&.find_module(name)
     end
 
