@@ -29,6 +29,10 @@ class ClassNode < BaseNode
     children.first.children.last.to_s
   end
 
+  def module?
+    false
+  end
+
   def instance_name
     Buttress::Inflector.underscore(name)
   end

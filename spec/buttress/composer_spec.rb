@@ -2485,6 +2485,59 @@ RSpec.describe Buttress::Composer, '#call' do
     expect(result).to eq(expected_tests)
   end
 
+  it 'generates specs for a module from its singleton methods alone' do
+    code = <<~RUBY
+      module Tools::Registry
+        def description
+          "tool registry"
+        end
+
+        class << self
+          def match?(text)
+            text == "r"
+          end
+
+          private
+
+          def secret
+            "hidden"
+          end
+        end
+      end
+    RUBY
+
+    expected_tests = <<~RUBY
+      RSpec.describe Tools::Registry do
+        describe '.match?' do
+          it 'returns text == "r"' do
+            expect(Tools::Registry.match?('blah1')).to eq(false)
+          end
+
+          it 'returns text == "r" (true)' do
+            expect(Tools::Registry.match?('r')).to eq(true)
+          end
+        end
+      end
+    RUBY
+
+    expect(described_class.call(code, 'Tools::Registry')).to eq(expected_tests)
+  end
+
+  it 'refuses a module instance method — no constructible receiver' do
+    code = <<~RUBY
+      module Helpers
+        def cyan(text)
+          "\\e[36m" + text + "\\e[0m"
+        end
+      end
+    RUBY
+
+    expect { described_class.call(code, 'Helpers', 'cyan') }.to raise_error(
+      Buttress::Error,
+      'module instance methods have no constructible receiver: #cyan'
+    )
+  end
+
   it 'splits a return-position && by short-circuit semantics' do
     code = <<~RUBY
       class Tag

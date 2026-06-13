@@ -30,18 +30,26 @@ Dir.glob(File.join(dir, "**", "*.rb")).sort.each do |file|
     next
   end
 
-  root.class_names.each do |class_name|
+  subjects = root.class_names.map { |name| [name, false] } +
+    root.module_names.map { |name| [name, true] }
+  subjects.each do |class_name, is_module|
     begin
-      class_node = root.find_class(class_name)
+      node = is_module ? root.find_module(class_name) : root.find_class(class_name)
     rescue StandardError => error
       crashes["find_class: #{error.message[0, 100]}"] << class_name
       next
     end
+    next if node.nil?
 
-    stats[:classes] += 1
+    # A module contributes only singleton methods (instance methods
+    # have no constructible receiver); namespace-only wrappers with
+    # none don't count as subjects.
+    methods = node.public_singleton_method_names.map { |name| [name, true] }
+    methods = node.public_method_names.map { |name| [name, false] } + methods unless is_module
+    next if is_module && methods.empty?
 
-    methods = class_node.public_method_names.map { |name| [name, false] } +
-      class_node.public_singleton_method_names.map { |name| [name, true] }
+    stats[is_module ? :modules : :classes] += 1
+
     methods.each do |method_name, singleton|
       stats[:methods] += 1
       begin
@@ -67,7 +75,7 @@ Dir.glob(File.join(dir, "**", "*.rb")).sort.each do |file|
 end
 
 puts "=== Totals ==="
-%i[classes methods crashed_methods tests concrete skipped].each do |key|
+%i[classes modules methods crashed_methods tests concrete skipped].each do |key|
   puts format("%-16s %d", key, stats[key])
 end
 

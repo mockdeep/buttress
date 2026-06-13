@@ -51,15 +51,20 @@ module Buttress
     private
 
     # [name, singleton?] pairs to generate flows for: instance methods
-    # and macro readers, then class-level methods.
+    # and macro readers, then class-level methods. A module contributes
+    # only its singleton methods — its instance methods have no
+    # constructible receiver (they're reachable as mixins instead).
     def method_entries(root_node, class_name, method_name, singleton)
       return [[method_name, singleton]] if method_name
 
-      class_node = root_node.find_class(class_name)
+      class_node = root_node.find_class_or_module(class_name)
+      singleton_entries =
+        class_node.public_singleton_method_names.map { |name| [name, true] }
+      return singleton_entries if class_node.module?
+
       instance_names =
         class_node.public_method_names + class_node.public_reader_names
-      instance_names.map { |name| [name, false] } +
-        class_node.public_singleton_method_names.map { |name| [name, true] }
+      instance_names.map { |name| [name, false] } + singleton_entries
     end
   end
 end

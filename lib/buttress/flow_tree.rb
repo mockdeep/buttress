@@ -99,7 +99,7 @@ module Buttress
     end
 
     def class_node
-      @class_node ||= root_node.find_class(class_name)
+      @class_node ||= root_node.find_class_or_module(class_name)
     end
 
     def method_node
@@ -108,6 +108,11 @@ module Buttress
           class_node.lookup_singleton_method(method_name) ||
             raise(Buttress::Error, "method not found: .#{method_name}")
         else
+          if class_node.module?
+            raise Buttress::Error, 'module instance methods have no ' \
+                                   "constructible receiver: ##{method_name}"
+          end
+
           class_node.lookup_method(method_name) ||
             reader_method_node ||
             raise(Buttress::Error, "method not found: ##{method_name}")

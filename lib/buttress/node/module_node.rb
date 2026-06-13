@@ -6,6 +6,10 @@ class ModuleNode < ClassNode
     nil
   end
 
+  def module?
+    true
+  end
+
   private
 
   def body_statements

@@ -22,29 +22,44 @@ class RootNode < BaseNode
     node && ModuleNode.new(node, parent_node: self)
   end
 
+  # The named class or module — a subject of generation. Constant
+  # resolution during evaluation stays on lookup_class: a module must
+  # never be offered where construction is possible.
+  def find_class_or_module(name)
+    lookup_class(name) || find_module(name) ||
+      raise(Buttress::Error, "class or module not found: #{name}")
+  end
+
   # Fully qualified names of every class defined in this file, in
   # definition order, however deeply nested in modules or written with
   # compact qualified names.
   def class_names
-    collect_class_names(raw_node).uniq
+    collect_names(raw_node, :class).uniq
+  end
+
+  # Fully qualified names of every module defined in this file, in
+  # definition order — including namespace-only wrappers; callers
+  # filter by public_singleton_method_names.
+  def module_names
+    collect_names(raw_node, :module).uniq
   end
 
   private
 
-  def collect_class_names(node, namespace = [], found = [])
+  def collect_names(node, wanted, namespace = [], found = [])
     return found unless node.is_a?(Parser::AST::Node)
 
     case node.type
     when :class, :module
       segments = const_segments(node.children.first)
       qualified = namespace + segments
-      found << qualified.join('::') if node.type == :class
+      found << qualified.join('::') if node.type == wanted
       node.children.drop(1).each do |child|
-        collect_class_names(child, qualified, found)
+        collect_names(child, wanted, qualified, found)
       end
     else
       node.children.each do |child|
-        collect_class_names(child, namespace, found)
+        collect_names(child, wanted, namespace, found)
       end
     end
     found

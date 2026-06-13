@@ -83,7 +83,8 @@ exe/buttress → Runner → Loader (reads file)
 
 `bin/dogfood` builds one `Sources` per project root and reuses it
 across that project's files. `bin/generate DIR` is the batch writer:
-one spec file per class with public methods or macro readers, written
+one spec file per class with public methods or macro readers — and
+per module with public singleton methods — written
 to the conventional locations; existing files are reported as a
 collision list, never overwritten, and a class whose flows all filter
 away (a reader-only Data class where every member echoes its input)
@@ -93,7 +94,14 @@ shell.
 The CLI takes `'ClassName#method'` for one instance method or
 `'ClassName.method'` for one singleton method (rendered with
 `spec.erb`), or bare `'ClassName'` for every public instance and
-singleton method (nested describes via `class_spec.erb`). Singleton
+singleton method (nested describes via `class_spec.erb`). Modules are
+subjects too, through their singleton methods alone — subject lookup
+goes through `RootNode#find_class_or_module` (constant resolution
+during evaluation stays on `lookup_class`, which never returns a
+module where construction is possible), and a module's *instance*
+methods are refused with a clean error rather than generated for:
+they have no constructible receiver, and are still reachable as
+mixins of other subjects. Singleton
 flows have no constructor world — the subject is the class-level call
 (`Klass.from_data(...)`), `Condition#constructor_params` is empty so
 every constructor concern (defaults, search slots, rendering) reduces
