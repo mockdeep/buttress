@@ -954,10 +954,39 @@ class Condition
     end
   end
 
+  # How many collaborators deep foreign-instance synthesis repairs its
+  # own constructor (State needs a filter and a sort, each of which
+  # might in turn need collaborators).
+  FOREIGN_REPAIR_DEPTH = 3
+
   # An interpreted instance of another project class, built from
   # default constructor inputs the same way the class under test is
-  # (with optional per-parameter overrides).
-  def foreign_instance(path, overrides = {})
+  # (with optional per-parameter overrides). When the foreign
+  # initialize itself can't evaluate under default inputs — it calls a
+  # method on a collaborator the default doesn't answer (State's
+  # `filter.call(cards)`) — the same failure-driven repair the main
+  # search uses runs over the foreign initialize's own parameters, so a
+  # class with real collaborators still enters the duck-type pool
+  # instead of silently dropping out.
+  def foreign_instance(path, overrides = {}, depth: 0)
+    # A fresh synthesis (depth 0) of a class already on the synthesis
+    # stack is a true cycle — Card needing a Checklist that needs a Card
+    # — and degrades. Self-repair re-enters the same path at depth > 0
+    # with more overrides, which is progressive refinement, not a cycle,
+    # so it is not guarded here (FOREIGN_REPAIR_DEPTH bounds it instead).
+    @synthesizing ||= []
+    fresh = depth.zero?
+    return nil if fresh && @synthesizing.include?(path)
+
+    @synthesizing.push(path) if fresh
+    begin
+      build_foreign_instance(path, overrides, depth)
+    ensure
+      @synthesizing.pop if fresh
+    end
+  end
+
+  def build_foreign_instance(path, overrides, depth)
     foreign = resolve_foreign_class(path)
     init = foreign&.lookup_method(:initialize)
     return nil unless init
@@ -974,13 +1003,85 @@ class Condition
     evaluator = Buttress::Evaluator.new(
       class_node: foreign, sources: sources, class_path: path, target: target,
     )
-    evaluator.run_initialize(deep_dup(positional), deep_dup(keywords))
+    begin
+      evaluator.run_initialize(deep_dup(positional), deep_dup(keywords))
+    rescue Buttress::CannotEvaluate => failure
+      return repair_foreign(path, init, overrides, failure, depth)
+    end
     Buttress::InstanceValue.new(
       class_path: path, positional: positional, keywords: keywords,
       ivars: deep_dup(evaluator.ivars),
     )
   rescue Buttress::CannotEvaluate
     nil
+  end
+
+  # The foreign initialize failed to evaluate: trace the failing
+  # receiver to the constructor parameter it came from (defaults are
+  # unique per position, so an exact-value match pins it) and retry
+  # synthesis with a collaborator that answers the method, recursing
+  # through foreign_instance itself. Depth- and budget-capped (the
+  # synthesis stack in foreign_instance guards against true cycles).
+  #
+  # Candidates are restricted to those whose constant path name-echoes
+  # the parameter (a slot named `filter` wants a `Filters::*`, `sort` a
+  # `Sorts::*`) plus the core containers — the top-level repair tries
+  # every definer, but a deep synthesis compounds that breadth across
+  # levels and would exhaust the budget before reaching the affinity-
+  # correct combination. Name-directed selection is both the principled
+  # choice and what keeps the search tractable.
+  def repair_foreign(path, init, overrides, failure, depth)
+    return nil if depth >= FOREIGN_REPAIR_DEPTH
+
+    receiver_class, method_name = parse_failure(failure.message)
+    return nil unless receiver_class
+
+    candidates = repair_candidates(method_name)
+    foreign_repair_targets(init, overrides, failure, receiver_class).each do |param|
+      focused_candidates(candidates, param.name).each do |value|
+        next if value == overrides[param.name]
+        return nil if (@search_attempts ||= 0) >= SEARCH_BUDGET
+
+        @search_attempts += 1
+        found = foreign_instance(
+          path, overrides.merge(param.name => value), depth: depth + 1,
+        )
+        return found if found
+      end
+    end
+    nil
+  end
+
+  # Candidates worth trying for a named foreign-constructor slot: the
+  # project collaborators whose path echoes the parameter name, plus the
+  # core containers ([] / {}) — an emptiness repair (cards => []) is
+  # name-blind, so the containers always stay in.
+  def focused_candidates(candidates, param_name)
+    candidates.select do |value|
+      affinity(param_name, value).positive? || !symbolic_value?(value)
+    end
+  end
+
+  def symbolic_value?(value)
+    value.is_a?(Buttress::ClassReference) ||
+      value.is_a?(Buttress::InstanceValue)
+  end
+
+  # The foreign initialize's own parameters the failing receiver could
+  # have come from, by the same value-tracing rule the top-level repair
+  # uses: an exact match when the failure carries its receiver, else any
+  # parameter holding a value of the receiver's class.
+  def foreign_repair_targets(init, overrides, failure, receiver_class)
+    params = init.args.select { |param| %i[arg kwarg].include?(param.type) }
+    if failure.is_a?(Buttress::CannotEvaluate) && failure.receiver_known?
+      exact = params.select do |param|
+        overrides.fetch(param.name, param.value) == failure.receiver
+      end
+      return exact if exact.any?
+    end
+    params.select do |param|
+      overrides.fetch(param.name, param.value).is_a?(receiver_class)
+    end
   end
 
   # Sibling classes resolve through Sources; classes defined in the

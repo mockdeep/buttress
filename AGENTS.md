@@ -155,7 +155,23 @@ no test.
   project classes and modules defining the missing method (via
   `Sources#definers_of`; singleton definers as the constant itself,
   instance definers as synthesized instances) plus core containers
-  ([] / {}). The same engine recurses on *both* failure kinds: when a
+  ([] / {}). `definers_of` indexes not just `def`s but macro readers
+  (Data members, attr_reader) and the Data-provided `#with`, so a slot
+  whose value must answer `#browse_page` or `#with` reaches the class
+  that provides it — the `state.with(...)` idiom names its argument's
+  class this way. A synthesized instance whose own constructor can't
+  evaluate under defaults (it routes an input through a collaborator,
+  `State`'s `filter.call(cards)`) self-repairs: `foreign_instance`
+  runs the same failure-driven repair over the foreign initialize's
+  own parameters (`Condition#repair_foreign`), so a class with real
+  collaborators still enters the duck-type pool instead of silently
+  dropping out. Deep synthesis compounds breadth across levels, so its
+  candidates are restricted to affinity name-echoes (`filter:` →
+  `Filters::*`) plus core containers, depth-capped (`FOREIGN_REPAIR_DEPTH`)
+  and guarded by a synthesis stack that degrades a true collaborator
+  cycle (`Card` needing a `Checklist` needing a `Card`) while still
+  allowing same-class self-repair to refine across slots. The same
+  engine recurses on *both* failure kinds: when a
   partially-repaired world's replay takes a branch the wrong way,
   `UnsatisfiablePath` carries the failing predicate, and a
   satisfaction expansion (tier-2c) assigns the input the predicate

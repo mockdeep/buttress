@@ -149,7 +149,7 @@ module Buttress
             index[:superclasses][key].uniq!
           end
         end
-        collect_methods(node, key, index)
+        collect_methods(node, key, index, root)
         node.children.drop(1).each do |child|
           collect(child, qualified, index, root)
         end
@@ -163,9 +163,18 @@ module Buttress
     # Records the definition's public methods under their names. The
     # node wrappers honor visibility modifiers, so a private def is
     # never offered as a duck-type candidate — a generated test calling
-    # it would raise NoMethodError for real.
-    def collect_methods(node, key, index)
-      wrapper = node.type == :class ? ClassNode.new(node) : ModuleNode.new(node)
+    # it would raise NoMethodError for real. A class wrapper is built
+    # through its home RootNode so Data members resolve (the same way
+    # find_class does), letting macro readers and the Data-provided
+    # #with join the duck-type pool: the bare `with(mode: ...)` idiom
+    # is exactly what steers a `state:`-named slot to a real instance.
+    def collect_methods(node, key, index, root)
+      wrapper =
+        if node.type == :class
+          root.lookup_class(key.split('::').last) || ClassNode.new(node)
+        else
+          ModuleNode.new(node)
+        end
       record = lambda do |name, kind|
         definer = Definer.new(key, kind)
         entries = (index[:methods][name] ||= [])
@@ -175,6 +184,11 @@ module Buttress
       wrapper.public_singleton_method_names.each do |name|
         record.call(name, :singleton)
       end
+      wrapper.public_reader_names.each { |name| record.call(name, :instance) }
+      # The evaluator interprets Data#with as a re-run of initialize with
+      # merged members; record it so a slot whose value must answer #with
+      # reaches the class that provides it.
+      record.call(:with, :instance) if wrapper.data_members.any?
     end
 
     def const_segments(node)

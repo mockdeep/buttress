@@ -106,6 +106,36 @@ RSpec.describe Buttress::Sources do
     )
   end
 
+  it 'indexes macro readers and Data#with as instance definers' do
+    File.write(File.join(root, 'lib/fake/record.rb'), <<~RUBY)
+      Fake::Record = Data.define(:slug, :count)
+
+      class Fake::Record
+        def initialize(slug:, count: 0)
+          super(slug:, count:)
+        end
+      end
+    RUBY
+    File.write(File.join(root, 'lib/fake/holder.rb'), <<~RUBY)
+      module Fake
+        class Holder
+          attr_reader :label
+
+          def initialize(label)
+            @label = label
+          end
+        end
+      end
+    RUBY
+
+    expect(sources.definers_of(:slug))
+      .to include(Buttress::Sources::Definer.new('Fake::Record', :instance))
+    expect(sources.definers_of(:with))
+      .to contain_exactly(Buttress::Sources::Definer.new('Fake::Record', :instance))
+    expect(sources.definers_of(:label))
+      .to contain_exactly(Buttress::Sources::Definer.new('Fake::Holder', :instance))
+  end
+
   it 'never offers private definitions as definers' do
     File.write(File.join(root, 'lib/fake/worker.rb'), <<~RUBY)
       module Fake
@@ -273,6 +303,58 @@ RSpec.describe Buttress::Sources do
       'items: [])',
     )
     expect(result).to include("expect(my_class.summary).to eq('first: nil of 0')")
+  end
+
+  it 'synthesizes a method argument whose own constructor needs repair' do
+    FileUtils.mkdir_p(File.join(root, 'lib/fake/filters'))
+    File.write(File.join(root, 'lib/fake/filters/none.rb'), <<~RUBY)
+      module Fake
+        module Filters
+          module None
+            class << self
+              def call(items)
+                items
+              end
+            end
+          end
+        end
+      end
+    RUBY
+    # Container routes one input through a collaborator the default
+    # string can't answer, so synthesizing it as an argument requires
+    # the foreign constructor to self-repair its filter slot first.
+    File.write(File.join(root, 'lib/fake/container.rb'), <<~RUBY)
+      Fake::Container = Data.define(:items, :filter)
+
+      class Fake::Container
+        def initialize(items:, filter:)
+          super(items: filter.call(items), filter:)
+        end
+      end
+    RUBY
+    code = <<~RUBY
+      module Fake
+        module Toggle
+          class << self
+            def run(container)
+              container.with(items: [])
+            end
+          end
+        end
+      end
+    RUBY
+
+    result = Buttress::Composer.call(
+      code, 'Fake::Toggle', 'run', sources: sources, singleton: true
+    )
+
+    expect(result).to include(
+      'Fake::Toggle.run(Fake::Container.new(items: \'blah1\', ' \
+      'filter: Fake::Filters::None))',
+    )
+    expect(result).to include(
+      'to eq(Fake::Container.new(items: [], filter: Fake::Filters::None))',
+    )
   end
 
   it 'lets the composer evaluate class methods from sibling files' do
