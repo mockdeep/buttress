@@ -379,12 +379,48 @@ module Buttress
       when :break
         value = node.children.first && call(node.children.first, env)
         throw :block_break, value
+      when :match_pattern
+        evaluate_match_pattern(node, env)
       else
         raise CannotEvaluate, source(node)
       end
     end
 
     private
+
+    # A rightward hash destructure (`state => { filter:, sort: }`): bind
+    # each `match_var` to the value's like-named member. Only bare
+    # match-var hash patterns are interpreted — an array pattern,
+    # value-constrained pair, or `**rest` would be a match assertion or
+    # a shape we can't prove, so it degrades. Under `=>` a runtime
+    # mismatch raises NoMatchingPatternError, but every member we read
+    # successfully is one the value provably has (a Data instance
+    # answers `deconstruct_keys` with exactly its members), so a value
+    # the path reaches can't raise; an unreadable member degrades here.
+    # The construct binds for effect and evaluates to nil.
+    def evaluate_match_pattern(node, env)
+      value_node, pattern = node.children
+      unless pattern.type == :hash_pattern &&
+             pattern.children.all? { |child| child.type == :match_var }
+        raise CannotEvaluate, source(node)
+      end
+
+      value = call(value_node, env)
+      pattern.children.each do |match_var|
+        name = match_var.children.first
+        env[name] = read_member(value, name)
+      end
+      nil
+    end
+
+    # The value's member under a pattern key: a Data member or attr read
+    # on an interpreted instance (through the send chokepoint), or a
+    # symbol-keyed lookup on a concrete Hash.
+    def read_member(value, name)
+      return send_to(value, name, []) unless value.is_a?(Hash)
+
+      value.fetch(name) { raise CannotEvaluate, "key #{name}" }
+    end
 
     def fetch(node, env)
       env.fetch(node.children.last) do

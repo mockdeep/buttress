@@ -258,6 +258,17 @@ no test.
   host's value couldn't cross the replay boundary: argless
   `Array#cycle` becomes a `CycleValue`, and regexp literals evaluate
   their parts like dstr (i/m/x flags only; everything else degrades).
+  A rightward hash destructure (`state => { filter:, sort: }`,
+  `:match_pattern`) binds each `match_var` to the value's like-named
+  member through the same send chokepoint (a Data-member read on an
+  interpreted instance, a symbol key on a Hash) and evaluates to nil;
+  only bare match-var hash patterns are interpreted, since an array
+  pattern, a value-constrained pair (`{ mode: Normal }`), or `**rest`
+  is a match assertion (a predicate) or a shape we can't prove, and
+  degrades. Sound under `=>` because a member that reads successfully
+  is one the value provably has — a Data instance answers
+  `deconstruct_keys` with exactly its members — so a value the path
+  reaches can't raise NoMatchingPatternError.
   Condition synthesizes a same-class InstanceValue for parameters
   named `other` (the comparison/equality protocol). Type predicates
   the receiver's class doesn't define are answered by the static type

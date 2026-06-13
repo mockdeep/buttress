@@ -357,6 +357,38 @@ RSpec.describe Buttress::Sources do
     )
   end
 
+  it 'destructures a synthesized argument with a rightward hash pattern' do
+    File.write(File.join(root, 'lib/fake/box.rb'), <<~RUBY)
+      Fake::Box = Data.define(:name, :size)
+
+      class Fake::Box
+        def initialize(name:, size: 0)
+          super(name:, size:)
+        end
+      end
+    RUBY
+    code = <<~RUBY
+      module Fake
+        module Reader
+          class << self
+            def label(box)
+              box => { name:, size: }
+              name
+            end
+          end
+        end
+      end
+    RUBY
+
+    result = Buttress::Composer.call(
+      code, 'Fake::Reader', 'label', sources: sources, singleton: true
+    )
+
+    expect(result).to include(
+      "expect(Fake::Reader.label(Fake::Box.new(name: 'blah1'))).to eq('blah1')",
+    )
+  end
+
   it 'lets the composer evaluate class methods from sibling files' do
     File.write(File.join(root, 'lib/fake/builder.rb'), <<~RUBY)
       module Fake

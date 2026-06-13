@@ -203,6 +203,25 @@ RSpec.describe Buttress::Evaluator do
     expect(call(expr("['a', 'b'].map(&:upcase)"))).to eq(%w[A B])
   end
 
+  it 'binds a rightward hash destructure from the value members' do
+    env = {}
+    node = expr(
+      'state = { filter: "none", sort: "first", extra: "x" }; ' \
+      'state => { filter:, sort: }',
+    )
+
+    call(node, env)
+    expect(env[:filter]).to eq('none')
+    expect(env[:sort]).to eq('first')
+  end
+
+  it 'degrades a destructure pattern that is not a bare match-var hash' do
+    expect { call(expr('state = { mode: "x" }; state => { mode: "x" }')) }
+      .to raise_error(Buttress::CannotEvaluate)
+    expect { call(expr('state = [1, 2]; state => [first, second]')) }
+      .to raise_error(Buttress::CannotEvaluate)
+  end
+
   it 'honors next and break inside blocks' do
     skip_evens = expr('[1, 2, 3].map { |x| next 0 if x == 2; x }')
     first_big = expr('[1, 2, 3].each { |x| break x * 10 if x > 1 }')

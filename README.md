@@ -87,7 +87,9 @@ interpolated expected strings — statically, without running
   outcome (-1/0/1); equality and `?`-query returns get both
   polarities, when inputs exist that reach them.
 - **Class-level method tests** (`def self.x`, `class << self`),
-  called on the class itself.
+  called on the class itself — including a module's singleton methods
+  (a module's instance methods are skipped, having no receiver to
+  construct).
 - **Reader tests** for the member values a constructor computes —
   defaulted keywords, derived `Data` members — skipping readers that
   merely echo their input back.
@@ -122,7 +124,7 @@ The spec is written to the conventional location (`lib/foo/bar.rb` →
 Batch tools, from a checkout of this repo:
 
 ```
-bin/generate DIR [TARGET_RUBY_VERSION]   # one spec file per class under DIR
+bin/generate DIR [TARGET_RUBY_VERSION]   # one spec file per class or module under DIR
 bin/dogfood DIR [TARGET_RUBY_VERSION]    # report only: concrete rate, skip reasons, crashes
 ```
 

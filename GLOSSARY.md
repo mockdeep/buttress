@@ -111,7 +111,15 @@ reading.
   names what's missing — `CannotEvaluate` carries the receiver that
   failed — so buttress swaps that exact input for something that does
   answer: a project class or module defining the method
-  (`Sources#definers_of`), or a plain `[]` / `{}`. Feedback-directed in
+  (`Sources#definers_of`, which indexes macro readers and the
+  Data-provided `#with` alongside ordinary `def`s, so a slot whose value
+  must answer `#browse_page` or `#with` reaches the class that has it),
+  or a plain `[]` / `{}`. A candidate whose *own* constructor can't
+  build under defaults — it routes an input through a collaborator
+  (`State`'s `filter.call(cards)`) — self-repairs the same way, the
+  repair recursing into the synthesized instance (depth- and
+  cycle-bounded), so a class with real collaborators still enters the
+  pool. Feedback-directed in
   the Randoop sense — the failure itself names the next candidate —
   though narrower: the feedback is a typed exception, not a generic run
   result.
@@ -189,7 +197,12 @@ reading.
 - **affinity ranking** — trying name-matching candidates first: a
   `filter:` keyword tries `Filters::*` classes before others, a `cards`
   collection synthesizes a `Card`. Names are a hint, not a rule —
-  non-matching candidates still get tried, just later.
+  non-matching candidates still get tried, just later. The one place
+  affinity is a filter rather than a hint: synthesizing a method
+  argument whose own constructor needs repair (tier-2b) restricts to
+  affinity matches plus the core containers, because the breadth would
+  otherwise compound across nesting levels and exhaust the budget before
+  the right combination is reached.
 - **vacuous world** — a world whose test passes without really testing
   anything: every block on the path iterated zero times because its
   collection was empty, so the assertion covers only the do-nothing
@@ -302,7 +315,11 @@ name at the moment they're needed.
   evaluator runs in singleton mode — receiverless sends resolve
   against the singleton scope, a bare `new` constructs an instance,
   and an unset class-level ivar degrades (class-body code buttress
-  never executes may have set it).
+  never executes may have set it). Modules are subjects this way too:
+  a module contributes its singleton methods (subject lookup goes
+  through `RootNode#find_class_or_module`), while its instance methods
+  are skipped — they have no constructible receiver and are reachable
+  only as mixins of other subjects.
 - **Flow / FlowTree** — what the templates see
   (`lib/buttress/flow_tree.rb`). A `Flow` wraps a `Condition` with
   rendering helpers (`method_call`, `constructor_call`, `subject`),
